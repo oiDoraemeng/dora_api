@@ -356,6 +356,7 @@ export default {
     groups: 'Groups',
     channels: 'Channels',
     availableChannels: 'Available Channels',
+    imageGeneration: 'AI Images',
     subscriptions: 'Subscriptions',
     accounts: 'Accounts',
     proxies: 'Proxies',
@@ -986,6 +987,36 @@ export default {
       unitPerMillion: '/ 1M tokens',
       unitPerRequest: '/ request'
     }
+  },
+
+  imageGeneration: {
+    title: 'AI Image Generation',
+    description: 'Generate images with your API key and consume usage in real time',
+    panelTitle: 'Generation Console',
+    panelSubtitle: 'Choose a key, model and prompt to generate images.',
+    apiKeyLabel: 'Current API Key',
+    apiKeyPlaceholder: 'Select an available API key',
+    noApiKeyHint: 'No active API key found. Create one in API Keys first.',
+    modelLabel: 'Model',
+    modelPlaceholder: 'Select an image model',
+    promptLabel: 'Prompt',
+    promptPlaceholder: 'Example: A glass greenhouse in morning mist, cinematic lighting, ultra realistic.',
+    sizeLabel: 'Size',
+    qualityLabel: 'Quality',
+    countLabel: 'Count',
+    countUnit: 'images',
+    generateButton: 'Generate Image',
+    generating: 'Generating...',
+    resultTitle: 'Generated Result',
+    resultMetaEmpty: 'No image generated yet',
+    emptyTitle: 'Your latest image will appear here',
+    emptyDescription: 'Enter a prompt and start generation. Result will be shown in this panel.',
+    historyTitle: 'History',
+    clearHistory: 'Clear History',
+    loadFailed: 'Failed to load image generation settings',
+    generateFailed: 'Image generation failed',
+    generateSuccess: 'Image generated successfully',
+    emptyResult: 'No image returned from the API'
   },
 
   affiliate: {
