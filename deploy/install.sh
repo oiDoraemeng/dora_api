@@ -24,7 +24,7 @@ CONFIG_DIR="/etc/sub2api"
 
 # Server configuration (will be set by user)
 SERVER_HOST="0.0.0.0"
-SERVER_PORT="8080"
+SERVER_PORT="8200"
 
 # Language (default: zh = Chinese)
 LANG_CHOICE="zh"
