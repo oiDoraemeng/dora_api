@@ -3,12 +3,14 @@ import { getLocale } from '@/i18n'
 
 export interface ImageGenerationRequest {
   apiKey: string
+  taskId?: string
   model: string
   prompt: string
   size?: string
   quality?: string
   n?: number
   generationBackend?: 'chatgpt2api' | 'openai_images' | string
+  signal?: AbortSignal
 }
 
 export interface ImageGenerationResult {
@@ -30,7 +32,14 @@ const imageGatewayClient = axios.create({
   }
 })
 
+function isCanceledRequest(error: unknown): boolean {
+  return axios.isAxiosError(error) && (error.code === 'ERR_CANCELED' || axios.isCancel(error))
+}
+
 function extractImageApiError(error: unknown): string {
+  if (isCanceledRequest(error)) {
+    return 'Image generation cancelled'
+  }
   if (axios.isAxiosError(error)) {
     const data = error.response?.data as
       | { error?: { message?: string }; message?: string }
@@ -54,6 +63,7 @@ function extractImageApiError(error: unknown): string {
 export async function generateImage(request: ImageGenerationRequest): Promise<ImageGenerationResponse> {
   const payload = {
     model: request.model,
+    task_id: request.taskId,
     prompt: request.prompt,
     size: request.size || '1024x1024',
     quality: request.quality || 'auto',
@@ -68,6 +78,7 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
       '/images/generations',
       payload,
       {
+        signal: request.signal,
         headers: {
           Authorization: `Bearer ${request.apiKey}`,
           'Accept-Language': getLocale()
@@ -76,12 +87,31 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
     )
     return data
   } catch (error) {
+    if (isCanceledRequest(error)) {
+      throw error
+    }
     throw new Error(extractImageApiError(error))
   }
 }
 
+export function cancelGeneration(apiKey: string, taskId: string): void {
+  const payload = JSON.stringify({ task_id: taskId })
+
+  void fetch('/v1/images/cancel', {
+    method: 'POST',
+    body: payload,
+    keepalive: true,
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'Accept-Language': getLocale()
+    }
+  }).catch(() => undefined)
+}
+
 export const imagesAPI = {
-  generateImage
+  generateImage,
+  cancelGeneration
 }
 
 export default imagesAPI

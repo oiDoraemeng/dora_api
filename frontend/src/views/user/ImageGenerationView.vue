@@ -128,7 +128,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Select from '@/components/common/Select.vue'
@@ -140,6 +140,14 @@ import { imagesAPI } from '@/api/images'
 import type { ApiKey, SelectOption } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
+import {
+  clearImageGenerationHistory,
+  loadImageGenerationDraft,
+  loadImageGenerationHistory,
+  saveImageGenerationDraftLocal,
+  saveImageGenerationDraft,
+  saveImageGenerationHistory
+} from '@/utils/imageGenerationHistory'
 import { maskApiKey } from '@/utils/maskApiKey'
 
 interface HistoryItem {
@@ -154,6 +162,7 @@ interface HistoryItem {
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const IMAGE_HISTORY_LIMIT = 24
 
 function tr(key: string, fallback: string): string {
   const text = t(key)
@@ -172,6 +181,11 @@ const prompt = ref('')
 const submitting = ref(false)
 const history = ref<HistoryItem[]>([])
 const activeHistoryId = ref<string | null>(null)
+let historyPersistQueue = Promise.resolve()
+let draftPersistTimer: number | null = null
+let currentGenerateController: AbortController | null = null
+let currentGenerateTaskId: string | null = null
+let restoringDraft = false
 
 const sizeOptions: SelectOption[] = [
   { value: '1024x1024', label: '1K · 1024×1024' },
@@ -260,13 +274,88 @@ function normalizeDataImage(value: string | undefined): string {
   return `data:image/png;base64,${trimmed}`
 }
 
+function queueHistoryPersistence(operation: () => Promise<void>, action: string): Promise<void> {
+  historyPersistQueue = historyPersistQueue
+    .catch(() => undefined)
+    .then(operation)
+    .catch((error) => {
+      console.warn(`[ImageGeneration] failed to ${action} history`, error)
+    })
+  return historyPersistQueue
+}
+
+function persistHistory(): Promise<void> {
+  const items = history.value.slice(0, IMAGE_HISTORY_LIMIT)
+  const activeId = activeHistoryId.value
+  return queueHistoryPersistence(() => saveImageGenerationHistory(items, activeId), 'persist')
+}
+
+function persistDraft() {
+  const draft = {
+    prompt: prompt.value,
+    model: String(selectedModel.value || ''),
+    size: String(selectedSize.value || ''),
+    quality: String(selectedQuality.value || ''),
+    count: Number(selectedCount.value || 1),
+    generationBackend: String(selectedGenerationBackend.value || '')
+  }
+  saveImageGenerationDraftLocal(draft)
+  void saveImageGenerationDraft(draft).catch((error) => {
+    console.warn('[ImageGeneration] failed to persist draft', error)
+  })
+}
+
+function scheduleDraftPersistence() {
+  if (restoringDraft) return
+  if (draftPersistTimer !== null) {
+    window.clearTimeout(draftPersistTimer)
+  }
+  draftPersistTimer = window.setTimeout(() => {
+    draftPersistTimer = null
+    persistDraft()
+  }, 300)
+}
+
+async function restoreHistory() {
+  try {
+    const snapshot = await loadImageGenerationHistory()
+    history.value = snapshot.items.slice(0, IMAGE_HISTORY_LIMIT)
+    activeHistoryId.value = snapshot.activeId && history.value.some((item) => item.id === snapshot.activeId)
+      ? snapshot.activeId
+      : history.value[0]?.id || null
+  } catch (error) {
+    console.warn('[ImageGeneration] failed to restore history', error)
+  }
+}
+
+async function restoreDraft() {
+  restoringDraft = true
+  try {
+    const draft = await loadImageGenerationDraft()
+    if (!draft) return
+    prompt.value = draft.prompt
+    selectedModel.value = draft.model || selectedModel.value
+    selectedSize.value = draft.size || selectedSize.value
+    selectedQuality.value = draft.quality || selectedQuality.value
+    selectedCount.value = draft.count || selectedCount.value
+    selectedGenerationBackend.value = draft.generationBackend || selectedGenerationBackend.value
+  } catch (error) {
+    console.warn('[ImageGeneration] failed to restore draft', error)
+  } finally {
+    restoringDraft = false
+  }
+}
+
 function setActive(id: string) {
   activeHistoryId.value = id
+  void persistHistory()
 }
 
 function clearHistory() {
+  revokeHistoryObjectURLs(history.value)
   history.value = []
   activeHistoryId.value = null
+  queueHistoryPersistence(clearImageGenerationHistory, 'clear')
 }
 
 async function loadApiKeys() {
@@ -282,6 +371,8 @@ async function loadChannels() {
 }
 
 async function init() {
+  await Promise.all([restoreHistory(), restoreDraft()])
+
   try {
     await Promise.all([loadApiKeys(), loadChannels()])
   } catch (error) {
@@ -289,19 +380,66 @@ async function init() {
   }
 }
 
+function isAbortError(error: unknown): boolean {
+  const maybeError = error as { name?: unknown; code?: unknown } | null
+  return maybeError?.name === 'AbortError' || maybeError?.name === 'CanceledError' || maybeError?.code === 'ERR_CANCELED'
+}
+
+function cancelCurrentGeneration() {
+  const taskId = currentGenerateTaskId
+  currentGenerateController?.abort()
+  if (taskId && activeApiKey.value) {
+    imagesAPI.cancelGeneration(activeApiKey.value, taskId)
+  }
+}
+
+function createGenerationTaskId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function flushDraftAndCancelCurrentGeneration() {
+  if (draftPersistTimer !== null) {
+    window.clearTimeout(draftPersistTimer)
+    draftPersistTimer = null
+  }
+  persistDraft()
+  cancelCurrentGeneration()
+}
+
+function revokeObjectURL(value: string) {
+  if (value.startsWith('blob:')) {
+    URL.revokeObjectURL(value)
+  }
+}
+
+function revokeHistoryObjectURLs(items: HistoryItem[]) {
+  for (const item of items) {
+    revokeObjectURL(item.imageUrl)
+  }
+}
+
 async function handleGenerate() {
   if (!canSubmit.value || submitting.value) return
 
+  cancelCurrentGeneration()
+  currentGenerateController = new AbortController()
+  currentGenerateTaskId = createGenerationTaskId()
   submitting.value = true
   try {
+    persistDraft()
     const response = await imagesAPI.generateImage({
       apiKey: activeApiKey.value,
+      taskId: currentGenerateTaskId,
       model: String(selectedModel.value),
       prompt: prompt.value.trim(),
       size: String(selectedSize.value || '1024x1024'),
       quality: String(selectedQuality.value || 'auto'),
       n: Number(selectedCount.value || 1),
-      generationBackend: String(selectedGenerationBackend.value || 'chatgpt2api')
+      generationBackend: String(selectedGenerationBackend.value || 'chatgpt2api'),
+      signal: currentGenerateController.signal
     })
 
     const items = response.data || []
@@ -332,18 +470,39 @@ async function handleGenerate() {
       return
     }
 
-    history.value = [...nextItems, ...history.value].slice(0, 24)
+    const previousHistory = history.value
+    history.value = [...nextItems, ...history.value].slice(0, IMAGE_HISTORY_LIMIT)
+    const retainedIDs = new Set(history.value.map((item) => item.id))
+    revokeHistoryObjectURLs(previousHistory.filter((item) => !retainedIDs.has(item.id)))
     activeHistoryId.value = nextItems[0].id
+    await persistHistory()
     appStore.showSuccess(tr('imageGeneration.generateSuccess', 'Image generated successfully'))
   } catch (error) {
+    if (isAbortError(error)) {
+      return
+    }
     appStore.showError(extractApiErrorMessage(error, tr('imageGeneration.generateFailed', 'Image generation failed')))
   } finally {
     submitting.value = false
+    currentGenerateController = null
+    currentGenerateTaskId = null
   }
 }
 
+watch(
+  [prompt, selectedModel, selectedSize, selectedQuality, selectedCount, selectedGenerationBackend],
+  scheduleDraftPersistence
+)
+
 onMounted(() => {
   init()
+  window.addEventListener('beforeunload', flushDraftAndCancelCurrentGeneration)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', flushDraftAndCancelCurrentGeneration)
+  flushDraftAndCancelCurrentGeneration()
+  revokeHistoryObjectURLs(history.value)
 })
 </script>
 
