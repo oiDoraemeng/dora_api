@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"mime/multipart"
@@ -53,7 +54,25 @@ func TestOpenAIGatewayServiceParseOpenAIImagesRequest_JSON(t *testing.T) {
 	require.Equal(t, "1024x1024", parsed.Size)
 	require.Equal(t, "1K", parsed.SizeTier)
 	require.Equal(t, OpenAIImagesCapabilityNative, parsed.RequiredCapability)
+	require.Equal(t, OpenAIImagesGenerationBackendOpenAIImages, parsed.GenerationBackend)
 	require.False(t, parsed.Multipart)
+}
+
+func TestOpenAIGatewayServiceParseOpenAIImagesRequest_ChatGPTWebBackend(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","generation_backend":"chatgpt2api"}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+
+	svc := &OpenAIGatewayService{}
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+	require.Equal(t, OpenAIImagesGenerationBackendChatGPTWeb, parsed.GenerationBackend)
+	require.Equal(t, OpenAIImagesCapabilityChatGPTWeb, parsed.RequiredCapability)
 }
 
 func TestOpenAIGatewayServiceParseOpenAIImagesRequest_MultipartEdit(t *testing.T) {
@@ -411,6 +430,26 @@ func TestAccountSupportsOpenAIImageCapability_OAuthSupportsNative(t *testing.T) 
 
 	require.True(t, account.SupportsOpenAIImageCapability(OpenAIImagesCapabilityBasic))
 	require.True(t, account.SupportsOpenAIImageCapability(OpenAIImagesCapabilityNative))
+	require.True(t, account.SupportsOpenAIImageCapability(OpenAIImagesCapabilityChatGPTWeb))
+
+	apiKeyAccount := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+	}
+	require.True(t, apiKeyAccount.SupportsOpenAIImageCapability(OpenAIImagesCapabilityBasic))
+	require.True(t, apiKeyAccount.SupportsOpenAIImageCapability(OpenAIImagesCapabilityNative))
+	require.False(t, apiKeyAccount.SupportsOpenAIImageCapability(OpenAIImagesCapabilityChatGPTWeb))
+}
+
+func TestRewriteOpenAIImagesModel_StripsLocalBackendField(t *testing.T) {
+	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","generation_backend":"chatgpt2api"}`)
+
+	rewritten, contentType, err := rewriteOpenAIImagesModel(body, "application/json", "gpt-image-2")
+
+	require.NoError(t, err)
+	require.Equal(t, "application/json", contentType)
+	require.False(t, gjson.GetBytes(rewritten, "generation_backend").Exists())
+	require.Equal(t, "gpt-image-2", gjson.GetBytes(rewritten, "model").String())
 }
 
 func TestBuildOpenAIImagesURL_HandlesVersionedBaseURL(t *testing.T) {
@@ -543,6 +582,350 @@ func TestOpenAIGatewayServiceForwardImages_OAuthUsesResponsesAPI(t *testing.T) {
 	require.Equal(t, "gpt-image-2", gjson.Get(rec.Body.String(), "model").String())
 	require.Equal(t, "aGVsbG8=", gjson.Get(rec.Body.String(), "data.0.b64_json").String())
 	require.Equal(t, "draw a cat", gjson.Get(rec.Body.String(), "data.0.revised_prompt").String())
+}
+
+func TestOpenAIGatewayServiceForwardImages_OAuthChatGPTWebGeneratesImage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","size":"1024x1024","generation_backend":"chatgpt2api","response_format":"b64_json"}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+	c.Set("api_key", &APIKey{ID: 42})
+
+	svc := &OpenAIGatewayService{}
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+
+	upstream := &httpUpstreamRecorder{
+		responses: []*http.Response{
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/html"}},
+				Body:       io.NopCloser(strings.NewReader(`<html data-build="build-a"><script src="/_next/static/chunks/c/abc/_/sdk.js"></script></html>`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"token":"sentinel-token"}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"conduit_token":"conduit-123"}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body: io.NopCloser(strings.NewReader(
+					"data: {\"conversation_id\":\"conv-123\",\"v\":{\"message\":{\"author\":{\"role\":\"tool\"},\"metadata\":{\"async_task_type\":\"image_gen\"},\"content\":{\"content_type\":\"multimodal_text\",\"parts\":[{\"asset_pointer\":\"file-service://file-result\"}]}}}}\n\n" +
+						"data: [DONE]\n\n",
+				)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"download_url":"https://files.example/result.png"}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"image/png"}},
+				Body:       io.NopCloser(strings.NewReader("PNGDATA")),
+			},
+		},
+	}
+	svc.httpUpstream = upstream
+
+	account := &Account{
+		ID:       1,
+		Name:     "openai-oauth",
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "token-123",
+		},
+	}
+
+	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, result.ImageCount)
+	require.Equal(t, "gpt-image-2", result.Model)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, base64.StdEncoding.EncodeToString([]byte("PNGDATA")), gjson.Get(rec.Body.String(), "data.0.b64_json").String())
+
+	require.Len(t, upstream.requests, 6)
+	require.Equal(t, "https://chatgpt.com/", upstream.requests[0].URL.String())
+	require.Equal(t, openAIChatGPTWebChatRequirementsURL, upstream.requests[1].URL.String())
+	require.Equal(t, openAIChatGPTWebPrepareURL, upstream.requests[2].URL.String())
+	require.Equal(t, openAIChatGPTWebConversationURL, upstream.requests[3].URL.String())
+	require.True(t, upstream.usedDoWithTLS)
+	require.NotNil(t, upstream.lastTLSProfile)
+	require.Equal(t, "Bearer token-123", upstream.requests[3].Header.Get("Authorization"))
+	require.Equal(t, "sentinel-token", upstream.requests[3].Header.Get("OpenAI-Sentinel-Chat-Requirements-Token"))
+	require.Equal(t, "conduit-123", upstream.requests[3].Header.Get("X-Conduit-Token"))
+	require.Equal(t, `"143.0.3650.96"`, upstream.requests[1].Header.Get("Sec-Ch-Ua-Full-Version"))
+	require.Contains(t, upstream.requests[1].Header.Get("Sec-Ch-Ua-Full-Version-List"), "Microsoft Edge")
+	require.Equal(t, `"19.0.0"`, upstream.requests[1].Header.Get("Sec-Ch-Ua-Platform-Version"))
+	require.Equal(t, "picture_v2", gjson.GetBytes(upstream.bodies[1], "system_hints.0").String())
+	require.Equal(t, "picture_v2", gjson.GetBytes(upstream.bodies[2], "system_hints.0").String())
+	require.Contains(t, gjson.GetBytes(upstream.bodies[1], "partial_query.content.parts.0").String(), "1024x1024")
+	require.Contains(t, gjson.GetBytes(upstream.bodies[2], "messages.0.content.parts.0").String(), "1024x1024")
+}
+
+func TestOpenAIGatewayServiceForwardImages_OAuthChatGPTWebBootstrap403Continues(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","size":"1024x1024","generation_backend":"chatgpt2api","response_format":"b64_json"}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+	c.Set("api_key", &APIKey{ID: 42})
+
+	svc := &OpenAIGatewayService{}
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+
+	upstream := &httpUpstreamRecorder{
+		responses: []*http.Response{
+			{
+				StatusCode: http.StatusForbidden,
+				Header:     http.Header{"Content-Type": []string{"text/html"}},
+				Body:       io.NopCloser(strings.NewReader(`forbidden`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"token":"sentinel-token"}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"conduit_token":"conduit-123"}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body: io.NopCloser(strings.NewReader(
+					"data: {\"conversation_id\":\"conv-123\",\"v\":{\"message\":{\"author\":{\"role\":\"tool\"},\"metadata\":{\"async_task_type\":\"image_gen\"},\"content\":{\"content_type\":\"multimodal_text\",\"parts\":[{\"asset_pointer\":\"file-service://file-result\"}]}}}}\n\n" +
+						"data: [DONE]\n\n",
+				)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"download_url":"https://files.example/result.png"}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"image/png"}},
+				Body:       io.NopCloser(strings.NewReader("PNGDATA")),
+			},
+		},
+	}
+	svc.httpUpstream = upstream
+
+	account := &Account{
+		ID:       1,
+		Name:     "openai-oauth",
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "token-123",
+		},
+	}
+
+	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, result.ImageCount)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, base64.StdEncoding.EncodeToString([]byte("PNGDATA")), gjson.Get(rec.Body.String(), "data.0.b64_json").String())
+
+	require.Len(t, upstream.requests, 6)
+	require.Equal(t, "https://chatgpt.com/", upstream.requests[0].URL.String())
+	require.Equal(t, openAIChatGPTWebChatRequirementsURL, upstream.requests[1].URL.String())
+	require.Equal(t, openAIChatGPTWebPrepareURL, upstream.requests[2].URL.String())
+	require.Equal(t, openAIChatGPTWebConversationURL, upstream.requests[3].URL.String())
+	require.True(t, upstream.usedDoWithTLS)
+	require.NotNil(t, upstream.lastTLSProfile)
+	require.Contains(t, gjson.GetBytes(upstream.bodies[0], "p").String(), openAIChatGPTWebDefaultPowScript)
+}
+
+func TestOpenAIGatewayServiceForwardImages_OAuthChatGPTWebFileDownload404UsesAttachmentFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","size":"1024x1024","generation_backend":"chatgpt2api","response_format":"b64_json"}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+	c.Set("api_key", &APIKey{ID: 42})
+
+	svc := &OpenAIGatewayService{}
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+
+	upstream := &httpUpstreamRecorder{
+		responses: []*http.Response{
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/html"}},
+				Body:       io.NopCloser(strings.NewReader(`<html data-build="build-a"><script src="/_next/static/chunks/c/abc/_/sdk.js"></script></html>`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"token":"sentinel-token"}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"conduit_token":"conduit-123"}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body: io.NopCloser(strings.NewReader(
+					"data: {\"conversation_id\":\"conv-123\",\"v\":{\"message\":{\"author\":{\"role\":\"tool\"},\"metadata\":{\"async_task_type\":\"image_gen\"},\"content\":{\"content_type\":\"multimodal_text\",\"parts\":[{\"asset_pointer\":\"file-service://file-result\"}]}}}}\n\n" +
+						"data: [DONE]\n\n",
+				)),
+			},
+			{
+				StatusCode: http.StatusNotFound,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"detail":"File link not found."}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"download_url":"https://chatgpt.com/backend-api/conversation/conv-123/attachment/file-result/raw"}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"image/png"}},
+				Body:       io.NopCloser(strings.NewReader("PNGDATA")),
+			},
+		},
+	}
+	svc.httpUpstream = upstream
+
+	account := &Account{
+		ID:       1,
+		Name:     "openai-oauth",
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "token-123",
+		},
+	}
+
+	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, base64.StdEncoding.EncodeToString([]byte("PNGDATA")), gjson.Get(rec.Body.String(), "data.0.b64_json").String())
+
+	require.Len(t, upstream.requests, 7)
+	require.Equal(t, "https://chatgpt.com/backend-api/files/file-result/download", upstream.requests[4].URL.String())
+	require.Equal(t, "https://chatgpt.com/backend-api/conversation/conv-123/attachment/file-result/download", upstream.requests[5].URL.String())
+	require.Equal(t, "https://chatgpt.com/backend-api/conversation/conv-123/attachment/file-result/raw", upstream.requests[6].URL.String())
+	require.Equal(t, "Bearer token-123", upstream.requests[6].Header.Get("Authorization"))
+	require.Equal(t, "image", upstream.requests[6].Header.Get("Sec-Fetch-Dest"))
+}
+
+func TestOpenAIGatewayServiceForwardImages_OAuthResponsesToolChoiceErrorFallsBackToChatGPTWeb(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","size":"1024x1024","response_format":"b64_json"}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+	c.Set("api_key", &APIKey{ID: 42})
+
+	svc := &OpenAIGatewayService{}
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+	require.Equal(t, OpenAIImagesGenerationBackendOpenAIImages, parsed.GenerationBackend)
+
+	upstream := &httpUpstreamRecorder{
+		responses: []*http.Response{
+			{
+				StatusCode: http.StatusBadRequest,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"Tool choice 'image_generation' not found in 'tools' parameter."}}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/html"}},
+				Body:       io.NopCloser(strings.NewReader(`<html data-build="build-a"><script src="/_next/static/chunks/c/abc/_/sdk.js"></script></html>`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"token":"sentinel-token"}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"conduit_token":"conduit-123"}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body: io.NopCloser(strings.NewReader(
+					"data: {\"conversation_id\":\"conv-123\",\"v\":{\"message\":{\"author\":{\"role\":\"tool\"},\"metadata\":{\"async_task_type\":\"image_gen\"},\"content\":{\"content_type\":\"multimodal_text\",\"parts\":[{\"asset_pointer\":\"file-service://file-result\"}]}}}}\n\n" +
+						"data: [DONE]\n\n",
+				)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"download_url":"https://files.example/result.png"}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"image/png"}},
+				Body:       io.NopCloser(strings.NewReader("PNGDATA")),
+			},
+		},
+	}
+	svc.httpUpstream = upstream
+
+	account := &Account{
+		ID:       1,
+		Name:     "openai-oauth",
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "token-123",
+		},
+	}
+
+	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, result.ImageCount)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, base64.StdEncoding.EncodeToString([]byte("PNGDATA")), gjson.Get(rec.Body.String(), "data.0.b64_json").String())
+
+	require.Len(t, upstream.requests, 7)
+	require.Contains(t, upstream.requests[0].URL.String(), "/responses")
+	require.Equal(t, "https://chatgpt.com/", upstream.requests[1].URL.String())
+	require.Equal(t, openAIChatGPTWebChatRequirementsURL, upstream.requests[2].URL.String())
+	require.Equal(t, openAIChatGPTWebPrepareURL, upstream.requests[3].URL.String())
+	require.Equal(t, openAIChatGPTWebConversationURL, upstream.requests[4].URL.String())
+	require.True(t, upstream.usedDoWithTLS)
+	require.NotNil(t, upstream.lastTLSProfile)
+	require.Contains(t, gjson.GetBytes(upstream.bodies[2], "partial_query.content.parts.0").String(), "1024x1024")
+	require.Contains(t, gjson.GetBytes(upstream.bodies[3], "messages.0.content.parts.0").String(), "1024x1024")
 }
 
 func TestOpenAIGatewayServiceForwardImages_APIKeyGenerationUsesConfiguredV1BaseURL(t *testing.T) {
