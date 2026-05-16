@@ -932,10 +932,12 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	}
 	logger.LegacyPrintf(
 		"service.openai_gateway",
-		"[OpenAI] Images request routing request_model=%s endpoint=%s account_type=%s uploads=%d",
+		"[OpenAI] Images request routing request_model=%s endpoint=%s account_type=%s generation_backend=%s capability=%s uploads=%d",
 		requestModel,
 		parsed.Endpoint,
 		account.Type,
+		parsed.GenerationBackend,
+		parsed.RequiredCapability,
 		len(parsed.Uploads),
 	)
 	if parsed.N > 1 {
@@ -1014,6 +1016,17 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 				RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
 			}
 		}
+		if shouldFallbackOpenAIImagesOAuthResponsesToChatGPTWeb(resp.StatusCode, upstreamMsg, parsed) {
+			logger.LegacyPrintf(
+				"service.openai_gateway",
+				"[OpenAI] Images responses path unsupported; retrying with ChatGPT Web request_model=%s endpoint=%s account_id=%d upstream_message=%s",
+				requestModel,
+				parsed.Endpoint,
+				account.ID,
+				upstreamMsg,
+			)
+			return s.forwardOpenAIImagesOAuthChatGPTWeb(ctx, c, account, parsed, channelMappedModel)
+		}
 		return s.handleErrorResponse(upstreamCtx, resp, c, account, responsesBody)
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -1063,4 +1076,14 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		ImageCount:      imageCount,
 		ImageSize:       parsed.SizeTier,
 	}, nil
+}
+
+func shouldFallbackOpenAIImagesOAuthResponsesToChatGPTWeb(statusCode int, upstreamMsg string, parsed *OpenAIImagesRequest) bool {
+	if parsed == nil || parsed.Stream || statusCode != http.StatusBadRequest {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(upstreamMsg))
+	return strings.Contains(msg, "tool choice") &&
+		strings.Contains(msg, "image_generation") &&
+		strings.Contains(msg, "not found")
 }
