@@ -97,6 +97,7 @@ type OpenAIImagesRequest struct {
 	MaskUpload         *OpenAIImagesUpload
 	Body               []byte
 	bodyHash           string
+	TaskID             string
 }
 
 func (r *OpenAIImagesRequest) ModerationBody() []byte {
@@ -238,6 +239,7 @@ func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
 		req.ExplicitModel = req.Model != ""
 	}
 	req.Prompt = strings.TrimSpace(gjson.GetBytes(body, "prompt").String())
+	req.TaskID = strings.TrimSpace(gjson.GetBytes(body, "task_id").String())
 
 	if streamResult := gjson.GetBytes(body, "stream"); streamResult.Exists() {
 		if streamResult.Type != gjson.True && streamResult.Type != gjson.False {
@@ -863,7 +865,7 @@ func rewriteOpenAIImagesModel(body []byte, contentType string, model string) ([]
 			return nil, "", fmt.Errorf("rewrite image request model: %w", err)
 		}
 	}
-	for _, path := range []string{"generation_backend", "generation_method", "image_backend"} {
+	for _, path := range []string{"generation_backend", "generation_method", "image_backend", "task_id"} {
 		if gjson.GetBytes(rewritten, path).Exists() {
 			rewritten, _ = sjson.DeleteBytes(rewritten, path)
 		}
@@ -936,7 +938,7 @@ func rewriteOpenAIImagesMultipartModel(body []byte, contentType string, model st
 
 func isOpenAIImagesLocalOnlyField(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "generation_backend", "generation_method", "image_backend":
+	case "generation_backend", "generation_method", "image_backend", "task_id":
 		return true
 	default:
 		return false

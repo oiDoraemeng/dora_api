@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -105,7 +106,14 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 	}
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(parsed.Stream, false)))
 
-	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, parsed.Model)
+	requestContext := c.Request.Context()
+	if strings.TrimSpace(parsed.TaskID) != "" {
+		var releaseTask func()
+		requestContext, releaseTask = service.WithOpenAIImagesCancelTask(requestContext, apiKey.ID, parsed.TaskID)
+		defer releaseTask()
+	}
+
+	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(requestContext, apiKey.GroupID, parsed.Model)
 
 	if h.errorPassthroughService != nil {
 		service.BindErrorPassthroughService(c, h.errorPassthroughService)
@@ -124,7 +132,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		defer userReleaseFunc()
 	}
 
-	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription); err != nil {
+	if err := h.billingCacheService.CheckBillingEligibility(requestContext, apiKey.User, apiKey, apiKey.Group, subscription); err != nil {
 		reqLog.Info("openai.images.billing_eligibility_check_failed", zap.Error(err))
 		status, code, message, retryAfter := billingErrorDetails(err)
 		if retryAfter > 0 {
@@ -145,7 +153,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 	for {
 		reqLog.Debug("openai.images.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForImages(
-			c.Request.Context(),
+			requestContext,
 			apiKey.GroupID,
 			sessionHash,
 			parsed.Model,
@@ -194,7 +202,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		forwardStart := time.Now()
-		result, err := h.gatewayService.ForwardImages(c.Request.Context(), c, account, body, parsed, channelMapping.MappedModel)
+		result, err := h.gatewayService.ForwardImages(requestContext, c, account, body, parsed, channelMapping.MappedModel)
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		if accountReleaseFunc != nil {
 			accountReleaseFunc()
@@ -230,7 +238,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 								zap.Int("retry_count", sameAccountRetryCount[account.ID]),
 							)
 							select {
-							case <-c.Request.Context().Done():
+							case <-requestContext.Done():
 								return
 							case <-time.After(sameAccountRetryDelay):
 							}
@@ -270,7 +278,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		}
 		if result != nil {
 			if account.Type == service.AccountTypeOAuth {
-				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(c.Request.Context(), account.ID, result.ResponseHeaders)
+				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(requestContext, account.ID, result.ResponseHeaders)
 			}
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
 		} else {
@@ -322,6 +330,26 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		)
 		return
 	}
+}
+
+func (h *OpenAIGatewayHandler) CancelImageGeneration(c *gin.Context) {
+	if c == nil || c.Request == nil {
+		return
+	}
+	var payload struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := json.NewDecoder(c.Request.Body).Decode(&payload); err != nil {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Invalid cancel request")
+		return
+	}
+	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
+	if !ok {
+		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		return
+	}
+	cancelled := service.CancelOpenAIImagesTask(apiKey.ID, payload.TaskID)
+	c.JSON(http.StatusOK, gin.H{"cancelled": cancelled})
 }
 
 func isMultipartImagesContentType(contentType string) bool {
