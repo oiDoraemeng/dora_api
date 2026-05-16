@@ -30,6 +30,18 @@
           </div>
 
           <div>
+            <label class="input-label">{{ tr('imageGeneration.backendLabel', 'Generation Method') }}</label>
+            <Select
+              v-model="selectedGenerationBackend"
+              :options="generationBackendOptions"
+              :placeholder="tr('imageGeneration.backendPlaceholder', 'Select generation method')"
+            />
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ tr('imageGeneration.backendHint', 'ChatGPT Web is recommended for OAuth/free account pools. OpenAI Images API keeps the original project route for Plus/API key pools.') }}
+            </p>
+          </div>
+
+          <div>
             <label class="input-label">{{ tr('imageGeneration.promptLabel', 'Prompt') }}</label>
             <TextArea
               v-model="prompt"
@@ -136,6 +148,7 @@ interface HistoryItem {
   prompt: string
   model: string
   size: string
+  backend: string
   createdAt: number
 }
 
@@ -151,6 +164,7 @@ const apiKeys = ref<ApiKey[]>([])
 const channels = ref<UserAvailableChannel[]>([])
 const selectedApiKeyValue = ref<string | number | boolean | null>(null)
 const selectedModel = ref<string | number | boolean | null>('gpt-image-2')
+const selectedGenerationBackend = ref<string | number | boolean | null>('chatgpt2api')
 const selectedSize = ref<string | number | boolean | null>('1024x1024')
 const selectedQuality = ref<string | number | boolean | null>('auto')
 const selectedCount = ref<string | number | boolean | null>(1)
@@ -178,6 +192,11 @@ const countOptions: SelectOption[] = [
   { value: 1, label: `1 ${tr('imageGeneration.countUnit', 'images')}` },
   { value: 2, label: `2 ${tr('imageGeneration.countUnit', 'images')}` },
   { value: 3, label: `3 ${tr('imageGeneration.countUnit', 'images')}` },
+]
+
+const generationBackendOptions: SelectOption[] = [
+  { value: 'chatgpt2api', label: tr('imageGeneration.backendChatGPTWeb', 'ChatGPT Web (recommended)') },
+  { value: 'openai_images', label: tr('imageGeneration.backendOpenAIImages', 'OpenAI Images API') },
 ]
 
 const apiKeyOptions = computed<SelectOption[]>(() => {
@@ -230,7 +249,7 @@ const resultMetaText = computed(() => {
   if (!activeHistory.value) {
     return tr('imageGeneration.resultMetaEmpty', 'No image generated yet')
   }
-  return `${activeHistory.value.model} · ${activeHistory.value.size}`
+  return `${activeHistory.value.model} / ${activeHistory.value.size} / ${activeHistory.value.backend}`
 })
 
 function normalizeDataImage(value: string | undefined): string {
@@ -281,7 +300,8 @@ async function handleGenerate() {
       prompt: prompt.value.trim(),
       size: String(selectedSize.value || '1024x1024'),
       quality: String(selectedQuality.value || 'auto'),
-      n: Number(selectedCount.value || 1)
+      n: Number(selectedCount.value || 1),
+      generationBackend: String(selectedGenerationBackend.value || 'chatgpt2api')
     })
 
     const items = response.data || []
@@ -302,6 +322,7 @@ async function handleGenerate() {
         prompt: item.revised_prompt || prompt.value.trim(),
         model: String(selectedModel.value),
         size: String(selectedSize.value || '1024x1024'),
+        backend: String(selectedGenerationBackend.value || 'chatgpt2api'),
         createdAt: now
       })
     }

@@ -8,6 +8,7 @@ export interface ImageGenerationRequest {
   size?: string
   quality?: string
   n?: number
+  generationBackend?: 'chatgpt2api' | 'openai_images' | string
 }
 
 export interface ImageGenerationResult {
@@ -57,6 +58,7 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
     size: request.size || '1024x1024',
     quality: request.quality || 'auto',
     n: request.n || 1,
+    generation_backend: request.generationBackend || 'chatgpt2api',
     response_format: 'b64_json',
     stream: false
   }
