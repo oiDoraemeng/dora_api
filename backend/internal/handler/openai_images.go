@@ -64,9 +64,9 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 	}
 
 	if isMultipartImagesContentType(c.GetHeader("Content-Type")) {
-		setOpsRequestContext(c, "", false, nil)
+		setOpsRequestContext(c, "", false)
 	} else {
-		setOpsRequestContext(c, "", false, body)
+		setOpsRequestContext(c, "", false)
 	}
 
 	parsed, err := h.gatewayService.ParseOpenAIImagesRequest(c, body)
@@ -100,9 +100,9 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 	}
 
 	if parsed.Multipart {
-		setOpsRequestContext(c, parsed.Model, parsed.Stream, nil)
+		setOpsRequestContext(c, parsed.Model, parsed.Stream)
 	} else {
-		setOpsRequestContext(c, parsed.Model, parsed.Stream, body)
+		setOpsRequestContext(c, parsed.Model, parsed.Stream)
 	}
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(parsed.Stream, false)))
 
@@ -166,6 +166,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
 			if len(failedAccountIDs) == 0 {
+				markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available compatible accounts", streamStarted)
 				return
 			}
@@ -177,6 +178,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			return
 		}
 		if selection == nil || selection.Account == nil {
+			markOpsRoutingCapacityLimited(c)
 			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available compatible accounts", streamStarted)
 			return
 		}

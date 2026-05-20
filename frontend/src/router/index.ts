@@ -9,7 +9,9 @@ import { useAppStore } from '@/stores/app'
 import { useAdminSettingsStore } from '@/stores/adminSettings'
 import { useNavigationLoadingState } from '@/composables/useNavigationLoading'
 import { useRoutePrefetch } from '@/composables/useRoutePrefetch'
+import { getSetupStatus } from '@/api/setup'
 import { resolveDisplaySiteName } from '@/utils/brand'
+import { resolveCompletedSetupRedirectPath } from './setupRedirect'
 import { resolveDocumentTitle } from './title'
 
 /**
@@ -741,6 +743,18 @@ router.beforeEach((to, _from, next) => {
   // Check if route requires authentication
   const requiresAuth = to.meta.requiresAuth !== false // Default to true
   const requiresAdmin = to.meta.requiresAdmin === true
+
+  if (to.path === '/setup') {
+    try {
+      const status = await getSetupStatus()
+      if (!status.needs_setup) {
+        next(resolveCompletedSetupRedirectPath(authStore.isAuthenticated, authStore.isAdmin))
+        return
+      }
+    } catch {
+      // Keep the setup page reachable when setup status cannot be determined.
+    }
+  }
 
   // If route doesn't require auth, allow access
   if (!requiresAuth) {
