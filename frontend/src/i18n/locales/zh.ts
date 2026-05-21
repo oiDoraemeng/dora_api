@@ -1057,7 +1057,7 @@ export default {
     backendPlaceholder: '选择生成方式',
     backendChatGPTWeb: 'ChatGPT Web（推荐）',
     backendOpenAIImages: 'OpenAI Images API',
-    backendHint: 'OAuth/free 账号池推荐 ChatGPT Web；Plus/API Key 账号池可切换 OpenAI Images API。',
+    backendHint: '温馨提示：图片可能不会长期保留，生成后请及时下载保存。',
     promptLabel: '提示词',
     promptPlaceholder: '示例：玻璃温室里的白猫，清晨雾气，电影级构图，超写实质感',
     sizeLabel: '尺寸',
