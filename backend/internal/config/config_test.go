@@ -1102,6 +1102,21 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "billing.circuit_breaker.half_open_requests",
 		},
 		{
+			name:    "billing input token multiplier positive",
+			mutate:  func(c *Config) { c.Billing.InputTokenBillingMultiplier = 0 },
+			wantErr: "billing.input_token_billing_multiplier",
+		},
+		{
+			name:    "billing output token multiplier positive",
+			mutate:  func(c *Config) { c.Billing.OutputTokenBillingMultiplier = 0 },
+			wantErr: "billing.output_token_billing_multiplier",
+		},
+		{
+			name:    "billing cache token multiplier positive",
+			mutate:  func(c *Config) { c.Billing.CacheTokenBillingMultiplier = 0 },
+			wantErr: "billing.cache_token_billing_multiplier",
+		},
+		{
 			name:    "database max open conns",
 			mutate:  func(c *Config) { c.Database.MaxOpenConns = 0 },
 			wantErr: "database.max_open_conns",

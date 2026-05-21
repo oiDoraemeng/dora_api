@@ -618,6 +618,9 @@ type ProxyProbeConfig struct {
 }
 
 type BillingConfig struct {
+	InputTokenBillingMultiplier  float64              `mapstructure:"input_token_billing_multiplier"`
+	OutputTokenBillingMultiplier float64              `mapstructure:"output_token_billing_multiplier"`
+	CacheTokenBillingMultiplier  float64              `mapstructure:"cache_token_billing_multiplier"`
 	CircuitBreaker CircuitBreakerConfig `mapstructure:"circuit_breaker"`
 }
 
@@ -1517,6 +1520,9 @@ func setDefaults() {
 	viper.SetDefault("security.proxy_fallback.allow_direct_on_error", false)
 
 	// Billing
+	viper.SetDefault("billing.input_token_billing_multiplier", 1.0)
+	viper.SetDefault("billing.output_token_billing_multiplier", 1.0)
+	viper.SetDefault("billing.cache_token_billing_multiplier", 1.0)
 	viper.SetDefault("billing.circuit_breaker.enabled", true)
 	viper.SetDefault("billing.circuit_breaker.failure_threshold", 5)
 	viper.SetDefault("billing.circuit_breaker.reset_timeout_seconds", 30)
@@ -2164,6 +2170,15 @@ func (c *Config) Validate() error {
 		if c.Billing.CircuitBreaker.HalfOpenRequests <= 0 {
 			return fmt.Errorf("billing.circuit_breaker.half_open_requests must be positive")
 		}
+	}
+	if c.Billing.InputTokenBillingMultiplier <= 0 {
+		return fmt.Errorf("billing.input_token_billing_multiplier must be positive")
+	}
+	if c.Billing.OutputTokenBillingMultiplier <= 0 {
+		return fmt.Errorf("billing.output_token_billing_multiplier must be positive")
+	}
+	if c.Billing.CacheTokenBillingMultiplier <= 0 {
+		return fmt.Errorf("billing.cache_token_billing_multiplier must be positive")
 	}
 	if c.Database.MaxOpenConns <= 0 {
 		return fmt.Errorf("database.max_open_conns must be positive")

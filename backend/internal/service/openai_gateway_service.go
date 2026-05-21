@@ -5403,6 +5403,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		CacheReadTokens:     result.Usage.CacheReadInputTokens,
 		ImageOutputTokens:   result.Usage.ImageOutputTokens,
 	}
+	billedTokens := s.billingService.scaleUsageTokensForBilling(tokens)
 
 	// Get rate multiplier
 	multiplier := 1.0
@@ -5489,11 +5490,11 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		ReasoningEffort:     result.ReasoningEffort,
 		InboundEndpoint:     optionalTrimmedStringPtr(input.InboundEndpoint),
 		UpstreamEndpoint:    optionalTrimmedStringPtr(input.UpstreamEndpoint),
-		InputTokens:         actualInputTokens,
-		OutputTokens:        result.Usage.OutputTokens,
-		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
-		CacheReadTokens:     result.Usage.CacheReadInputTokens,
-		ImageOutputTokens:   result.Usage.ImageOutputTokens,
+		InputTokens:         billedTokens.InputTokens,
+		OutputTokens:        billedTokens.OutputTokens,
+		CacheCreationTokens: billedTokens.CacheCreationTokens,
+		CacheReadTokens:     billedTokens.CacheReadTokens,
+		ImageOutputTokens:   billedTokens.ImageOutputTokens,
 		ImageCount:          result.ImageCount,
 		ImageSize:           optionalTrimmedStringPtr(result.ImageSize),
 		ImageInputSize:      optionalTrimmedStringPtr(result.ImageInputSize),
@@ -5557,7 +5558,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if apiKey.GroupID != nil {
 		applyAccountStatsCost(ctx, usageLog, s.channelService, s.billingService,
 			account.ID, *apiKey.GroupID, result.UpstreamModel, result.Model,
-			tokens, cost.TotalCost,
+			billedTokens, cost.TotalCost,
 		)
 	}
 

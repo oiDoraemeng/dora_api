@@ -11,7 +11,11 @@ import (
 )
 
 func newTestBillingService() *BillingService {
-	return NewBillingService(&config.Config{}, nil)
+	cfg := &config.Config{}
+	cfg.Billing.InputTokenBillingMultiplier = 1.0
+	cfg.Billing.OutputTokenBillingMultiplier = 1.0
+	cfg.Billing.CacheTokenBillingMultiplier = 1.0
+	return NewBillingService(cfg, nil)
 }
 
 func TestCalculateCost_BasicComputation(t *testing.T) {
@@ -365,6 +369,9 @@ func TestCalculateCost_ZeroTokens(t *testing.T) {
 func TestCalculateCostWithConfig(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Default.RateMultiplier = 1.5
+	cfg.Billing.InputTokenBillingMultiplier = 1.0
+	cfg.Billing.OutputTokenBillingMultiplier = 1.0
+	cfg.Billing.CacheTokenBillingMultiplier = 1.0
 	svc := NewBillingService(cfg, nil)
 
 	tokens := UsageTokens{InputTokens: 1000, OutputTokens: 500}
@@ -378,6 +385,9 @@ func TestCalculateCostWithConfig(t *testing.T) {
 func TestCalculateCostWithConfig_ZeroMultiplier(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Default.RateMultiplier = 0
+	cfg.Billing.InputTokenBillingMultiplier = 1.0
+	cfg.Billing.OutputTokenBillingMultiplier = 1.0
+	cfg.Billing.CacheTokenBillingMultiplier = 1.0
 	svc := NewBillingService(cfg, nil)
 
 	tokens := UsageTokens{InputTokens: 1000}
@@ -424,7 +434,11 @@ func TestForceUpdatePricing_NilService(t *testing.T) {
 func TestCalculateCostWithLongContext_PropagatesError(t *testing.T) {
 	// 使用空的 fallback prices 让 GetModelPricing 失败
 	svc := &BillingService{
-		cfg:            &config.Config{},
+		cfg: &config.Config{Billing: config.BillingConfig{
+			InputTokenBillingMultiplier:  1.0,
+			OutputTokenBillingMultiplier: 1.0,
+			CacheTokenBillingMultiplier:  1.0,
+		}},
 		fallbackPrices: make(map[string]*ModelPricing),
 	}
 
@@ -434,9 +448,40 @@ func TestCalculateCostWithLongContext_PropagatesError(t *testing.T) {
 	require.Contains(t, err.Error(), "pricing not found")
 }
 
+func TestCalculateCost_TokenBillingMultipliersScaleAndRoundUp(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Billing.InputTokenBillingMultiplier = 1.25
+	cfg.Billing.OutputTokenBillingMultiplier = 1.5
+	cfg.Billing.CacheTokenBillingMultiplier = 2.0
+	svc := NewBillingService(cfg, nil)
+
+	tokens := UsageTokens{
+		InputTokens:           1,
+		OutputTokens:          2,
+		CacheCreationTokens:   3,
+		CacheReadTokens:       4,
+		CacheCreation5mTokens: 1,
+		CacheCreation1hTokens: 1,
+		ImageOutputTokens:     5,
+	}
+	scaled := svc.scaleUsageTokensForBilling(tokens)
+
+	require.Equal(t, 2, scaled.InputTokens)         // ceil(1*1.25)=2
+	require.Equal(t, 3, scaled.OutputTokens)        // ceil(2*1.5)=3
+	require.Equal(t, 6, scaled.CacheCreationTokens) // ceil(3*2.0)=6
+	require.Equal(t, 8, scaled.CacheReadTokens)     // ceil(4*2.0)=8
+	require.Equal(t, 2, scaled.CacheCreation5mTokens)
+	require.Equal(t, 2, scaled.CacheCreation1hTokens)
+	require.Equal(t, 8, scaled.ImageOutputTokens) // ceil(5*1.5)=8
+}
+
 func TestCalculateCost_SupportsCacheBreakdown(t *testing.T) {
 	svc := &BillingService{
-		cfg: &config.Config{},
+		cfg: &config.Config{Billing: config.BillingConfig{
+			InputTokenBillingMultiplier:  1.0,
+			OutputTokenBillingMultiplier: 1.0,
+			CacheTokenBillingMultiplier:  1.0,
+		}},
 		fallbackPrices: map[string]*ModelPricing{
 			"claude-sonnet-4": {
 				InputPricePerToken:     3e-6,

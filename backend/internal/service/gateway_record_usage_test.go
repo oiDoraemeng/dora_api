@@ -17,6 +17,9 @@ import (
 func newGatewayRecordUsageServiceForTest(usageRepo UsageLogRepository, userRepo UserRepository, subRepo UserSubscriptionRepository) *GatewayService {
 	cfg := &config.Config{}
 	cfg.Default.RateMultiplier = 1.1
+	cfg.Billing.InputTokenBillingMultiplier = 1.0
+	cfg.Billing.OutputTokenBillingMultiplier = 1.0
+	cfg.Billing.CacheTokenBillingMultiplier = 1.0
 	return NewGatewayService(
 		nil,
 		nil,

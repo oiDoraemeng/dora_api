@@ -985,6 +985,11 @@ pricing:
 # 计费配置
 # =============================================================================
 billing:
+  # Multipliers applied to token counts before billing and usage log persistence
+  # 计费前对输入/输出/缓存 token 分别放大，并写入放大后的 usage_log token
+  input_token_billing_multiplier: 1.25
+  output_token_billing_multiplier: 1.25
+  cache_token_billing_multiplier: 1.25
   circuit_breaker:
     # Enable circuit breaker for billing service
     # 启用计费服务熔断器

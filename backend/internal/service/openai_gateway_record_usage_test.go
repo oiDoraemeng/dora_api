@@ -134,6 +134,9 @@ func i64p(v int64) *int64 {
 func newOpenAIRecordUsageServiceForTest(usageRepo UsageLogRepository, userRepo UserRepository, subRepo UserSubscriptionRepository, rateRepo UserGroupRateRepository) *OpenAIGatewayService {
 	cfg := &config.Config{}
 	cfg.Default.RateMultiplier = 1.1
+	cfg.Billing.InputTokenBillingMultiplier = 1.0
+	cfg.Billing.OutputTokenBillingMultiplier = 1.0
+	cfg.Billing.CacheTokenBillingMultiplier = 1.0
 	svc := NewOpenAIGatewayService(
 		nil,
 		usageRepo,
@@ -1237,6 +1240,37 @@ func TestOpenAIGatewayServiceRecordUsage_UnpricedTokenModelFallsBackToZeroCostUs
 	require.Zero(t, usageRepo.lastLog.ActualCost)
 	require.Equal(t, 0, userRepo.deductCalls)
 	require.Equal(t, 0, subRepo.incrementCalls)
+}
+
+func TestOpenAIGatewayServiceRecordUsage_UsageLogStoresScaledTokens(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
+	svc.cfg.Billing.InputTokenBillingMultiplier = 1.25
+	svc.cfg.Billing.OutputTokenBillingMultiplier = 1.5
+	svc.cfg.Billing.CacheTokenBillingMultiplier = 2.0
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "resp_scaled_usage_tokens",
+			Model:     "gpt-5.1",
+			Usage: OpenAIUsage{
+				InputTokens:          10,
+				OutputTokens:         5,
+				CacheReadInputTokens: 2,
+			},
+			Duration: time.Second,
+		},
+		APIKey:  &APIKey{ID: 10},
+		User:    &User{ID: 20},
+		Account: &Account{ID: 30},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, 10, usageRepo.lastLog.InputTokens)  // ceil((10-2)*1.25)=10
+	require.Equal(t, 8, usageRepo.lastLog.OutputTokens)  // ceil(5*1.5)=8
+	require.Equal(t, 4, usageRepo.lastLog.CacheReadTokens) // ceil(2*2.0)=4
 }
 
 func TestOpenAIGatewayServiceRecordUsage_SubscriptionBillingSetsSubscriptionFields(t *testing.T) {

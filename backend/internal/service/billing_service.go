@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -452,7 +453,8 @@ func (s *BillingService) CalculateCostUnified(input CostInput) (*CostBreakdown, 
 
 // calculateTokenCost 按 token 区间计费
 func (s *BillingService) calculateTokenCost(resolved *ResolvedPricing, input CostInput) (*CostBreakdown, error) {
-	totalContext := input.Tokens.InputTokens + input.Tokens.CacheReadTokens
+	scaledTokens := s.scaleUsageTokensForBilling(input.Tokens)
+	totalContext := scaledTokens.InputTokens + scaledTokens.CacheReadTokens
 
 	pricing := input.Resolver.GetIntervalPricing(resolved, totalContext)
 	if pricing == nil {
@@ -464,7 +466,7 @@ func (s *BillingService) calculateTokenCost(resolved *ResolvedPricing, input Cos
 	// 长上下文定价仅在无区间定价时应用（区间定价已包含上下文分层）
 	applyLongCtx := len(resolved.Intervals) == 0
 
-	return s.computeTokenBreakdown(pricing, input.Tokens, input.RateMultiplier, input.ServiceTier, applyLongCtx), nil
+	return s.computeTokenBreakdown(pricing, scaledTokens, input.RateMultiplier, input.ServiceTier, applyLongCtx), nil
 }
 
 // computeTokenBreakdown 是 token 计费的核心逻辑，由 calculateTokenCost 和 calculateCostInternal 共用。
@@ -542,6 +544,58 @@ func (s *BillingService) computeTokenBreakdown(
 	return bd
 }
 
+func (s *BillingService) inputTokenBillingMultiplier() float64 {
+	if s == nil || s.cfg == nil {
+		return 1.0
+	}
+	if s.cfg.Billing.InputTokenBillingMultiplier <= 0 {
+		return 1.0
+	}
+	return s.cfg.Billing.InputTokenBillingMultiplier
+}
+
+func (s *BillingService) outputTokenBillingMultiplier() float64 {
+	if s == nil || s.cfg == nil {
+		return 1.0
+	}
+	if s.cfg.Billing.OutputTokenBillingMultiplier <= 0 {
+		return 1.0
+	}
+	return s.cfg.Billing.OutputTokenBillingMultiplier
+}
+
+func (s *BillingService) cacheTokenBillingMultiplier() float64 {
+	if s == nil || s.cfg == nil {
+		return 1.0
+	}
+	if s.cfg.Billing.CacheTokenBillingMultiplier <= 0 {
+		return 1.0
+	}
+	return s.cfg.Billing.CacheTokenBillingMultiplier
+}
+
+func (s *BillingService) scaleTokenForBilling(value int, multiplier float64) int {
+	if value <= 0 {
+		return 0
+	}
+	return int(math.Ceil(float64(value) * multiplier))
+}
+
+func (s *BillingService) scaleUsageTokensForBilling(tokens UsageTokens) UsageTokens {
+	scaled := tokens
+	inputMultiplier := s.inputTokenBillingMultiplier()
+	outputMultiplier := s.outputTokenBillingMultiplier()
+	cacheMultiplier := s.cacheTokenBillingMultiplier()
+	scaled.InputTokens = s.scaleTokenForBilling(tokens.InputTokens, inputMultiplier)
+	scaled.OutputTokens = s.scaleTokenForBilling(tokens.OutputTokens, outputMultiplier)
+	scaled.CacheCreationTokens = s.scaleTokenForBilling(tokens.CacheCreationTokens, cacheMultiplier)
+	scaled.CacheReadTokens = s.scaleTokenForBilling(tokens.CacheReadTokens, cacheMultiplier)
+	scaled.CacheCreation5mTokens = s.scaleTokenForBilling(tokens.CacheCreation5mTokens, cacheMultiplier)
+	scaled.CacheCreation1hTokens = s.scaleTokenForBilling(tokens.CacheCreation1hTokens, cacheMultiplier)
+	scaled.ImageOutputTokens = s.scaleTokenForBilling(tokens.ImageOutputTokens, outputMultiplier)
+	return scaled
+}
+
 // computeCacheCreationCost 计算缓存创建费用（支持 5m/1h 分类或标准计费）。
 func (s *BillingService) computeCacheCreationCost(pricing *ModelPricing, tokens UsageTokens) float64 {
 	if pricing.SupportsCacheBreakdown && (pricing.CacheCreation5mPrice > 0 || pricing.CacheCreation1hPrice > 0) {
@@ -569,7 +623,8 @@ func (s *BillingService) calculatePerRequestCost(resolved *ResolvedPricing, inpu
 	}
 
 	if unitPrice == 0 {
-		totalContext := input.Tokens.InputTokens + input.Tokens.CacheReadTokens
+		scaledTokens := s.scaleUsageTokensForBilling(input.Tokens)
+		totalContext := scaledTokens.InputTokens + scaledTokens.CacheReadTokens
 		unitPrice = input.Resolver.GetRequestTierPriceByContext(resolved, totalContext)
 	}
 
@@ -608,8 +663,10 @@ func (s *BillingService) calculateCostInternal(model string, tokens UsageTokens,
 		return nil, err
 	}
 
+	scaledTokens := s.scaleUsageTokensForBilling(tokens)
+
 	// 旧路径始终检查长上下文定价（无区间定价概念）
-	return s.computeTokenBreakdown(pricing, tokens, rateMultiplier, serviceTier, true), nil
+	return s.computeTokenBreakdown(pricing, scaledTokens, rateMultiplier, serviceTier, true), nil
 }
 
 func (s *BillingService) applyModelSpecificPricingPolicy(model string, pricing *ModelPricing) *ModelPricing {
@@ -671,61 +728,55 @@ func (s *BillingService) CalculateCostWithConfig(model string, tokens UsageToken
 // 拆分为：范围内 (200k, 0) + 范围外 (10k, 10k)
 // 范围内正常计费，范围外 × 2 计费
 func (s *BillingService) CalculateCostWithLongContext(model string, tokens UsageTokens, rateMultiplier float64, threshold int, extraMultiplier float64) (*CostBreakdown, error) {
-	// 未启用长上下文计费，直接走正常计费
+	scaledTokens := s.scaleUsageTokensForBilling(tokens)
+
 	if threshold <= 0 || extraMultiplier <= 1 {
-		return s.CalculateCost(model, tokens, rateMultiplier)
+		return s.calculateCostInternalWithPreScaledTokens(model, scaledTokens, rateMultiplier, "", nil)
 	}
 
-	// 计算总输入 token（缓存读取 + 新输入）
-	total := tokens.CacheReadTokens + tokens.InputTokens
+	total := scaledTokens.CacheReadTokens + scaledTokens.InputTokens
 	if total <= threshold {
-		return s.CalculateCost(model, tokens, rateMultiplier)
+		return s.calculateCostInternalWithPreScaledTokens(model, scaledTokens, rateMultiplier, "", nil)
 	}
 
-	// 拆分成范围内和范围外
 	var inRangeCacheTokens, inRangeInputTokens int
 	var outRangeCacheTokens, outRangeInputTokens int
 
-	if tokens.CacheReadTokens >= threshold {
-		// 缓存已超过阈值：范围内只有缓存，范围外是超出的缓存+全部输入
+	if scaledTokens.CacheReadTokens >= threshold {
 		inRangeCacheTokens = threshold
 		inRangeInputTokens = 0
-		outRangeCacheTokens = tokens.CacheReadTokens - threshold
-		outRangeInputTokens = tokens.InputTokens
+		outRangeCacheTokens = scaledTokens.CacheReadTokens - threshold
+		outRangeInputTokens = scaledTokens.InputTokens
 	} else {
-		// 缓存未超过阈值：范围内是全部缓存+部分输入，范围外是剩余输入
-		inRangeCacheTokens = tokens.CacheReadTokens
-		inRangeInputTokens = threshold - tokens.CacheReadTokens
+		inRangeCacheTokens = scaledTokens.CacheReadTokens
+		inRangeInputTokens = threshold - scaledTokens.CacheReadTokens
 		outRangeCacheTokens = 0
-		outRangeInputTokens = tokens.InputTokens - inRangeInputTokens
+		outRangeInputTokens = scaledTokens.InputTokens - inRangeInputTokens
 	}
 
-	// 范围内部分：正常计费
 	inRangeTokens := UsageTokens{
 		InputTokens:           inRangeInputTokens,
-		OutputTokens:          tokens.OutputTokens, // 输出只算一次
-		CacheCreationTokens:   tokens.CacheCreationTokens,
+		OutputTokens:          scaledTokens.OutputTokens,
+		CacheCreationTokens:   scaledTokens.CacheCreationTokens,
 		CacheReadTokens:       inRangeCacheTokens,
-		CacheCreation5mTokens: tokens.CacheCreation5mTokens,
-		CacheCreation1hTokens: tokens.CacheCreation1hTokens,
-		ImageOutputTokens:     tokens.ImageOutputTokens,
+		CacheCreation5mTokens: scaledTokens.CacheCreation5mTokens,
+		CacheCreation1hTokens: scaledTokens.CacheCreation1hTokens,
+		ImageOutputTokens:     scaledTokens.ImageOutputTokens,
 	}
-	inRangeCost, err := s.CalculateCost(model, inRangeTokens, rateMultiplier)
+	inRangeCost, err := s.calculateCostInternalWithPreScaledTokens(model, inRangeTokens, rateMultiplier, "", nil)
 	if err != nil {
 		return nil, err
 	}
 
-	// 范围外部分：× extraMultiplier 计费
 	outRangeTokens := UsageTokens{
 		InputTokens:     outRangeInputTokens,
 		CacheReadTokens: outRangeCacheTokens,
 	}
-	outRangeCost, err := s.CalculateCost(model, outRangeTokens, rateMultiplier*extraMultiplier)
+	outRangeCost, err := s.calculateCostInternalWithPreScaledTokens(model, outRangeTokens, rateMultiplier*extraMultiplier, "", nil)
 	if err != nil {
 		return inRangeCost, fmt.Errorf("out-range cost: %w", err)
 	}
 
-	// 合并成本
 	return &CostBreakdown{
 		InputCost:         inRangeCost.InputCost + outRangeCost.InputCost,
 		OutputCost:        inRangeCost.OutputCost,
@@ -735,6 +786,20 @@ func (s *BillingService) CalculateCostWithLongContext(model string, tokens Usage
 		TotalCost:         inRangeCost.TotalCost + outRangeCost.TotalCost,
 		ActualCost:        inRangeCost.ActualCost + outRangeCost.ActualCost,
 	}, nil
+}
+
+func (s *BillingService) calculateCostInternalWithPreScaledTokens(model string, scaledTokens UsageTokens, rateMultiplier float64, serviceTier string, channelPricing *ChannelModelPricing) (*CostBreakdown, error) {
+	var pricing *ModelPricing
+	var err error
+	if channelPricing != nil {
+		pricing, err = s.GetModelPricingWithChannel(model, channelPricing)
+	} else {
+		pricing, err = s.GetModelPricing(model)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.computeTokenBreakdown(pricing, scaledTokens, rateMultiplier, serviceTier, true), nil
 }
 
 // ListSupportedModels 列出所有支持的模型（现在总是返回true，因为有模糊匹配）
