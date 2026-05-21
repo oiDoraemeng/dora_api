@@ -761,7 +761,11 @@ func TestOpenAIGatewayServiceForwardImages_OAuthChatGPTWebBootstrap403Continues(
 	require.Equal(t, openAIChatGPTWebConversationURL, upstream.requests[3].URL.String())
 	require.True(t, upstream.usedDoWithTLS)
 	require.NotNil(t, upstream.lastTLSProfile)
-	require.Contains(t, gjson.GetBytes(upstream.bodies[0], "p").String(), openAIChatGPTWebDefaultPowScript)
+	proofToken := gjson.GetBytes(upstream.bodies[0], "p").String()
+	require.True(t, strings.HasPrefix(proofToken, "gAAAAAC"))
+	proofPayload, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(proofToken, "gAAAAAC"))
+	require.NoError(t, err)
+	require.Contains(t, string(proofPayload), openAIChatGPTWebDefaultPowScript)
 }
 
 func TestOpenAIGatewayServiceForwardImages_OAuthChatGPTWebFileDownload404UsesAttachmentFallback(t *testing.T) {
