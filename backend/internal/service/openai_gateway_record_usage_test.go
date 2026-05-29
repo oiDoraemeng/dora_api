@@ -159,6 +159,7 @@ func newOpenAIRecordUsageServiceForTest(usageRepo UsageLogRepository, userRepo U
 		nil,
 		nil,
 		nil,
+		nil, // userPlatformQuotaRepo
 	)
 	svc.userGroupRateResolver = newUserGroupRateResolver(
 		rateRepo,
@@ -1268,8 +1269,8 @@ func TestOpenAIGatewayServiceRecordUsage_UsageLogStoresScaledTokens(t *testing.T
 	})
 	require.NoError(t, err)
 	require.NotNil(t, usageRepo.lastLog)
-	require.Equal(t, 10, usageRepo.lastLog.InputTokens)  // ceil((10-2)*1.25)=10
-	require.Equal(t, 8, usageRepo.lastLog.OutputTokens)  // ceil(5*1.5)=8
+	require.Equal(t, 10, usageRepo.lastLog.InputTokens)    // ceil((10-2)*1.25)=10
+	require.Equal(t, 8, usageRepo.lastLog.OutputTokens)    // ceil(5*1.5)=8
 	require.Equal(t, 4, usageRepo.lastLog.CacheReadTokens) // ceil(2*2.0)=4
 }
 
