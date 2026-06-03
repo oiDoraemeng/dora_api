@@ -37,7 +37,7 @@
               :placeholder="tr('imageGeneration.backendPlaceholder', 'Select generation method')"
             />
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ tr('imageGeneration.backendHint', 'ChatGPT Web is recommended for OAuth/free account pools. OpenAI Images API keeps the original project route for Plus/API key pools.') }}
+              {{ tr('imageGeneration.backendHint', 'OpenAI Images API is recommended. ChatGPT Web remains available for OAuth/free account pools.') }}
             </p>
           </div>
 
@@ -173,7 +173,7 @@ const apiKeys = ref<ApiKey[]>([])
 const channels = ref<UserAvailableChannel[]>([])
 const selectedApiKeyValue = ref<string | number | boolean | null>(null)
 const selectedModel = ref<string | number | boolean | null>('gpt-image-2')
-const selectedGenerationBackend = ref<string | number | boolean | null>('chatgpt2api')
+const selectedGenerationBackend = ref<string | number | boolean | null>('openai_images')
 const selectedSize = ref<string | number | boolean | null>('1024x1024')
 const selectedQuality = ref<string | number | boolean | null>('auto')
 const selectedCount = ref<string | number | boolean | null>(1)
@@ -209,8 +209,8 @@ const countOptions: SelectOption[] = [
 ]
 
 const generationBackendOptions: SelectOption[] = [
-  { value: 'chatgpt2api', label: tr('imageGeneration.backendChatGPTWeb', 'ChatGPT Web (recommended)') },
-  { value: 'openai_images', label: tr('imageGeneration.backendOpenAIImages', 'OpenAI Images API') },
+  { value: 'openai_images', label: tr('imageGeneration.backendOpenAIImages', 'OpenAI Images API (recommended)') },
+  { value: 'chatgpt2api', label: tr('imageGeneration.backendChatGPTWeb', 'ChatGPT Web') },
 ]
 
 const apiKeyOptions = computed<SelectOption[]>(() => {
@@ -438,7 +438,7 @@ async function handleGenerate() {
       size: String(selectedSize.value || '1024x1024'),
       quality: String(selectedQuality.value || 'auto'),
       n: Number(selectedCount.value || 1),
-      generationBackend: String(selectedGenerationBackend.value || 'chatgpt2api'),
+      generationBackend: String(selectedGenerationBackend.value || 'openai_images'),
       signal: currentGenerateController.signal
     })
 
@@ -460,7 +460,7 @@ async function handleGenerate() {
         prompt: item.revised_prompt || prompt.value.trim(),
         model: String(selectedModel.value),
         size: String(selectedSize.value || '1024x1024'),
-        backend: String(selectedGenerationBackend.value || 'chatgpt2api'),
+        backend: String(selectedGenerationBackend.value || 'openai_images'),
         createdAt: now
       })
     }
