@@ -4,6 +4,8 @@ package service
 
 import (
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -605,6 +607,60 @@ func TestCalculateCost_TokenBillingMultipliersScaleAndRoundUp(t *testing.T) {
 	require.Equal(t, 2, scaled.CacheCreation5mTokens)
 	require.Equal(t, 2, scaled.CacheCreation1hTokens)
 	require.Equal(t, 8, scaled.ImageOutputTokens) // ceil(5*1.5)=8
+}
+
+func TestTokenBillingOverrides_UserMultiplierPrecedesGlobal(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Pricing.DataDir = t.TempDir()
+	cfg.Billing.InputTokenBillingMultiplier = 1.1
+	cfg.Billing.OutputTokenBillingMultiplier = 1.2
+	cfg.Billing.CacheTokenBillingMultiplier = 1.3
+
+	err := os.WriteFile(filepath.Join(cfg.Pricing.DataDir, "token_billing_overrides.yaml"), []byte(`
+users:
+  - user_id: 1001
+    input: 1.5
+    output: 1.8
+    cache: 2.0
+
+  - user_id: 1003
+    input: 1.7
+`), 0644)
+	require.NoError(t, err)
+
+	svc := NewBillingService(cfg, nil)
+	userMultipliers := svc.tokenBillingMultipliersForUser(1001)
+	userScaled := svc.scaleUsageTokensForBillingWithMultipliers(UsageTokens{
+		InputTokens:     10,
+		OutputTokens:    10,
+		CacheReadTokens: 10,
+	}, userMultipliers)
+
+	require.Equal(t, 15, userScaled.InputTokens)
+	require.Equal(t, 18, userScaled.OutputTokens)
+	require.Equal(t, 20, userScaled.CacheReadTokens)
+
+	globalMultipliers := svc.tokenBillingMultipliersForUser(1002)
+	globalScaled := svc.scaleUsageTokensForBillingWithMultipliers(UsageTokens{
+		InputTokens:     10,
+		OutputTokens:    10,
+		CacheReadTokens: 10,
+	}, globalMultipliers)
+
+	require.Equal(t, 11, globalScaled.InputTokens)
+	require.Equal(t, 12, globalScaled.OutputTokens)
+	require.Equal(t, 13, globalScaled.CacheReadTokens)
+
+	partialMultipliers := svc.tokenBillingMultipliersForUser(1003)
+	partialScaled := svc.scaleUsageTokensForBillingWithMultipliers(UsageTokens{
+		InputTokens:     10,
+		OutputTokens:    10,
+		CacheReadTokens: 10,
+	}, partialMultipliers)
+
+	require.Equal(t, 17, partialScaled.InputTokens)
+	require.Equal(t, 12, partialScaled.OutputTokens)
+	require.Equal(t, 13, partialScaled.CacheReadTokens)
 }
 
 func TestCalculateCost_SupportsCacheBreakdown(t *testing.T) {

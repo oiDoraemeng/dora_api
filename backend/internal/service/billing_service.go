@@ -166,6 +166,7 @@ type BillingService struct {
 	cfg            *config.Config
 	pricingService *PricingService
 	fallbackPrices map[string]*ModelPricing // 硬编码回退价格
+	tokenOverrides *tokenBillingOverrideResolver
 }
 
 // NewBillingService 创建计费服务实例
@@ -175,6 +176,12 @@ func NewBillingService(cfg *config.Config, pricingService *PricingService) *Bill
 		pricingService: pricingService,
 		fallbackPrices: make(map[string]*ModelPricing),
 	}
+
+	tokenOverrides, err := loadTokenBillingOverrideResolver(cfg)
+	if err != nil {
+		panic(fmt.Sprintf("load token billing overrides: %v", err))
+	}
+	s.tokenOverrides = tokenOverrides
 
 	// 初始化硬编码回退价格（当动态价格不可用时使用）
 	s.initFallbackPricing()
@@ -446,16 +453,17 @@ func (s *BillingService) GetModelPricingWithChannel(model string, channelPricing
 
 // CostInput 统一计费输入
 type CostInput struct {
-	Ctx            context.Context
-	Model          string
-	GroupID        *int64 // 用于渠道定价查找
-	Tokens         UsageTokens
-	RequestCount   int    // 按次计费时使用
-	SizeTier       string // 按次/图片模式的层级标签（"1K","2K","4K","HD" 等）
-	RateMultiplier float64
-	ServiceTier    string                // "priority","flex","" 等
-	Resolver       *ModelPricingResolver // 定价解析器
-	Resolved       *ResolvedPricing      // 可选：预解析的定价结果（避免重复 Resolve 调用）
+	Ctx                     context.Context
+	Model                   string
+	GroupID                 *int64 // 用于渠道定价查找
+	Tokens                  UsageTokens
+	RequestCount            int    // 按次计费时使用
+	SizeTier                string // 按次/图片模式的层级标签（"1K","2K","4K","HD" 等）
+	RateMultiplier          float64
+	ServiceTier             string                   // "priority","flex","" 等
+	Resolver                *ModelPricingResolver    // 定价解析器
+	Resolved                *ResolvedPricing         // 可选：预解析的定价结果（避免重复 Resolve 调用）
+	TokenBillingMultipliers *TokenBillingMultipliers // 可选：本次请求的 token 放大倍率
 }
 
 // CalculateCostUnified 统一计费入口，支持三种计费模式。
@@ -463,7 +471,7 @@ type CostInput struct {
 func (s *BillingService) CalculateCostUnified(input CostInput) (*CostBreakdown, error) {
 	if input.Resolver == nil {
 		// 无 Resolver，回退到旧路径
-		return s.calculateCostInternal(input.Model, input.Tokens, input.RateMultiplier, input.ServiceTier, nil)
+		return s.calculateCostInternal(input.Model, input.Tokens, input.RateMultiplier, input.ServiceTier, nil, input.TokenBillingMultipliers)
 	}
 
 	// 优先使用预解析结果，避免重复 Resolve 调用
@@ -499,7 +507,7 @@ func (s *BillingService) CalculateCostUnified(input CostInput) (*CostBreakdown, 
 
 // calculateTokenCost 按 token 区间计费
 func (s *BillingService) calculateTokenCost(resolved *ResolvedPricing, input CostInput) (*CostBreakdown, error) {
-	scaledTokens := s.scaleUsageTokensForBilling(input.Tokens)
+	scaledTokens := s.scaleUsageTokensForBillingWithMultipliers(input.Tokens, s.resolveTokenBillingMultipliers(input.TokenBillingMultipliers))
 	totalContext := scaledTokens.InputTokens + scaledTokens.CacheReadTokens
 
 	pricing := input.Resolver.GetIntervalPricing(resolved, totalContext)
@@ -628,6 +636,40 @@ func (s *BillingService) cacheTokenBillingMultiplier() float64 {
 	return s.cfg.Billing.CacheTokenBillingMultiplier
 }
 
+func (s *BillingService) defaultTokenBillingMultipliers() TokenBillingMultipliers {
+	return TokenBillingMultipliers{
+		Input:  s.inputTokenBillingMultiplier(),
+		Output: s.outputTokenBillingMultiplier(),
+		Cache:  s.cacheTokenBillingMultiplier(),
+	}
+}
+
+func (s *BillingService) tokenBillingMultipliersForUser(userID int64) TokenBillingMultipliers {
+	multipliers := s.defaultTokenBillingMultipliers()
+	if s != nil && s.tokenOverrides != nil {
+		if override, ok := s.tokenOverrides.Resolve(userID); ok {
+			if override.Input != nil {
+				multipliers.Input = *override.Input
+			}
+			if override.Output != nil {
+				multipliers.Output = *override.Output
+			}
+			if override.Cache != nil {
+				multipliers.Cache = *override.Cache
+			}
+			return multipliers
+		}
+	}
+	return multipliers
+}
+
+func (s *BillingService) resolveTokenBillingMultipliers(multipliers *TokenBillingMultipliers) TokenBillingMultipliers {
+	if multipliers != nil {
+		return *multipliers
+	}
+	return s.defaultTokenBillingMultipliers()
+}
+
 func (s *BillingService) scaleTokenForBilling(value int, multiplier float64) int {
 	if value <= 0 {
 		return 0
@@ -636,17 +678,18 @@ func (s *BillingService) scaleTokenForBilling(value int, multiplier float64) int
 }
 
 func (s *BillingService) scaleUsageTokensForBilling(tokens UsageTokens) UsageTokens {
+	return s.scaleUsageTokensForBillingWithMultipliers(tokens, s.defaultTokenBillingMultipliers())
+}
+
+func (s *BillingService) scaleUsageTokensForBillingWithMultipliers(tokens UsageTokens, multipliers TokenBillingMultipliers) UsageTokens {
 	scaled := tokens
-	inputMultiplier := s.inputTokenBillingMultiplier()
-	outputMultiplier := s.outputTokenBillingMultiplier()
-	cacheMultiplier := s.cacheTokenBillingMultiplier()
-	scaled.InputTokens = s.scaleTokenForBilling(tokens.InputTokens, inputMultiplier)
-	scaled.OutputTokens = s.scaleTokenForBilling(tokens.OutputTokens, outputMultiplier)
-	scaled.CacheCreationTokens = s.scaleTokenForBilling(tokens.CacheCreationTokens, cacheMultiplier)
-	scaled.CacheReadTokens = s.scaleTokenForBilling(tokens.CacheReadTokens, cacheMultiplier)
-	scaled.CacheCreation5mTokens = s.scaleTokenForBilling(tokens.CacheCreation5mTokens, cacheMultiplier)
-	scaled.CacheCreation1hTokens = s.scaleTokenForBilling(tokens.CacheCreation1hTokens, cacheMultiplier)
-	scaled.ImageOutputTokens = s.scaleTokenForBilling(tokens.ImageOutputTokens, outputMultiplier)
+	scaled.InputTokens = s.scaleTokenForBilling(tokens.InputTokens, multipliers.Input)
+	scaled.OutputTokens = s.scaleTokenForBilling(tokens.OutputTokens, multipliers.Output)
+	scaled.CacheCreationTokens = s.scaleTokenForBilling(tokens.CacheCreationTokens, multipliers.Cache)
+	scaled.CacheReadTokens = s.scaleTokenForBilling(tokens.CacheReadTokens, multipliers.Cache)
+	scaled.CacheCreation5mTokens = s.scaleTokenForBilling(tokens.CacheCreation5mTokens, multipliers.Cache)
+	scaled.CacheCreation1hTokens = s.scaleTokenForBilling(tokens.CacheCreation1hTokens, multipliers.Cache)
+	scaled.ImageOutputTokens = s.scaleTokenForBilling(tokens.ImageOutputTokens, multipliers.Output)
 	return scaled
 }
 
@@ -678,7 +721,7 @@ func (s *BillingService) calculatePerRequestCost(resolved *ResolvedPricing, inpu
 	}
 
 	if unitPrice == 0 {
-		scaledTokens := s.scaleUsageTokensForBilling(input.Tokens)
+		scaledTokens := s.scaleUsageTokensForBillingWithMultipliers(input.Tokens, s.resolveTokenBillingMultipliers(input.TokenBillingMultipliers))
 		totalContext := scaledTokens.InputTokens + scaledTokens.CacheReadTokens
 		unitPrice = input.Resolver.GetRequestTierPriceByContext(resolved, totalContext)
 	}
@@ -699,14 +742,18 @@ func (s *BillingService) calculatePerRequestCost(resolved *ResolvedPricing, inpu
 
 // CalculateCost 计算使用费用
 func (s *BillingService) CalculateCost(model string, tokens UsageTokens, rateMultiplier float64) (*CostBreakdown, error) {
-	return s.calculateCostInternal(model, tokens, rateMultiplier, "", nil)
+	return s.calculateCostInternal(model, tokens, rateMultiplier, "", nil, nil)
 }
 
 func (s *BillingService) CalculateCostWithServiceTier(model string, tokens UsageTokens, rateMultiplier float64, serviceTier string) (*CostBreakdown, error) {
-	return s.calculateCostInternal(model, tokens, rateMultiplier, serviceTier, nil)
+	return s.calculateCostInternal(model, tokens, rateMultiplier, serviceTier, nil, nil)
 }
 
-func (s *BillingService) calculateCostInternal(model string, tokens UsageTokens, rateMultiplier float64, serviceTier string, channelPricing *ChannelModelPricing) (*CostBreakdown, error) {
+func (s *BillingService) CalculateCostWithServiceTierAndTokenMultipliers(model string, tokens UsageTokens, rateMultiplier float64, serviceTier string, tokenBillingMultipliers TokenBillingMultipliers) (*CostBreakdown, error) {
+	return s.calculateCostInternal(model, tokens, rateMultiplier, serviceTier, nil, &tokenBillingMultipliers)
+}
+
+func (s *BillingService) calculateCostInternal(model string, tokens UsageTokens, rateMultiplier float64, serviceTier string, channelPricing *ChannelModelPricing, tokenBillingMultipliers *TokenBillingMultipliers) (*CostBreakdown, error) {
 	var pricing *ModelPricing
 	var err error
 	if channelPricing != nil {
@@ -718,7 +765,7 @@ func (s *BillingService) calculateCostInternal(model string, tokens UsageTokens,
 		return nil, err
 	}
 
-	scaledTokens := s.scaleUsageTokensForBilling(tokens)
+	scaledTokens := s.scaleUsageTokensForBillingWithMultipliers(tokens, s.resolveTokenBillingMultipliers(tokenBillingMultipliers))
 
 	// 旧路径始终检查长上下文定价（无区间定价概念）
 	return s.computeTokenBreakdown(pricing, scaledTokens, rateMultiplier, serviceTier, true), nil
@@ -783,7 +830,15 @@ func (s *BillingService) CalculateCostWithConfig(model string, tokens UsageToken
 // 拆分为：范围内 (200k, 0) + 范围外 (10k, 10k)
 // 范围内正常计费，范围外 × 2 计费
 func (s *BillingService) CalculateCostWithLongContext(model string, tokens UsageTokens, rateMultiplier float64, threshold int, extraMultiplier float64) (*CostBreakdown, error) {
-	scaledTokens := s.scaleUsageTokensForBilling(tokens)
+	return s.calculateCostWithLongContext(model, tokens, rateMultiplier, threshold, extraMultiplier, nil)
+}
+
+func (s *BillingService) CalculateCostWithLongContextAndTokenMultipliers(model string, tokens UsageTokens, rateMultiplier float64, threshold int, extraMultiplier float64, tokenBillingMultipliers TokenBillingMultipliers) (*CostBreakdown, error) {
+	return s.calculateCostWithLongContext(model, tokens, rateMultiplier, threshold, extraMultiplier, &tokenBillingMultipliers)
+}
+
+func (s *BillingService) calculateCostWithLongContext(model string, tokens UsageTokens, rateMultiplier float64, threshold int, extraMultiplier float64, tokenBillingMultipliers *TokenBillingMultipliers) (*CostBreakdown, error) {
+	scaledTokens := s.scaleUsageTokensForBillingWithMultipliers(tokens, s.resolveTokenBillingMultipliers(tokenBillingMultipliers))
 
 	if threshold <= 0 || extraMultiplier <= 1 {
 		return s.calculateCostInternalWithPreScaledTokens(model, scaledTokens, rateMultiplier, "", nil)

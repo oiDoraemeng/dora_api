@@ -5646,7 +5646,8 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		CacheReadTokens:     result.Usage.CacheReadInputTokens,
 		ImageOutputTokens:   result.Usage.ImageOutputTokens,
 	}
-	billedTokens := s.billingService.scaleUsageTokensForBilling(tokens)
+	tokenBillingMultipliers := s.billingService.tokenBillingMultipliersForUser(user.ID)
+	billedTokens := s.billingService.scaleUsageTokensForBillingWithMultipliers(tokens, tokenBillingMultipliers)
 
 	// Get rate multiplier
 	multiplier := 1.0
@@ -5686,7 +5687,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if result.ServiceTier != nil {
 		serviceTier = strings.TrimSpace(*result.ServiceTier)
 	}
-	cost, err = s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, billingModels, multiplier, imageMultiplier, tokens, serviceTier)
+	cost, err = s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, billingModels, multiplier, imageMultiplier, tokens, serviceTier, tokenBillingMultipliers)
 	if err != nil {
 		if !isUsagePricingUnavailableError(err) {
 			return err
@@ -5850,10 +5851,11 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 	imageMultiplier float64,
 	tokens UsageTokens,
 	serviceTier string,
+	tokenBillingMultipliers TokenBillingMultipliers,
 ) (*CostBreakdown, error) {
 	billingModel := firstUsageBillingModel(billingModels)
 	if result != nil && result.ImageCount > 0 {
-		return s.calculateOpenAIImageCost(ctx, billingModel, apiKey, result, imageMultiplier), nil
+		return s.calculateOpenAIImageCost(ctx, billingModel, apiKey, result, imageMultiplier, tokenBillingMultipliers), nil
 	}
 	if len(billingModels) == 0 || billingModel == "" {
 		return nil, errors.New("openai usage billing model is empty")
@@ -5864,7 +5866,7 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 		if candidate == "" {
 			continue
 		}
-		cost, err := s.calculateOpenAIRecordUsageTokenCost(ctx, apiKey, candidate, multiplier, tokens, serviceTier)
+		cost, err := s.calculateOpenAIRecordUsageTokenCost(ctx, apiKey, candidate, multiplier, tokens, serviceTier, tokenBillingMultipliers)
 		if err == nil {
 			return cost, nil
 		}
@@ -5894,21 +5896,23 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageTokenCost(
 	multiplier float64,
 	tokens UsageTokens,
 	serviceTier string,
+	tokenBillingMultipliers TokenBillingMultipliers,
 ) (*CostBreakdown, error) {
 	if s.resolver != nil && apiKey.Group != nil {
 		gid := apiKey.Group.ID
 		return s.billingService.CalculateCostUnified(CostInput{
-			Ctx:            ctx,
-			Model:          billingModel,
-			GroupID:        &gid,
-			Tokens:         tokens,
-			RequestCount:   1,
-			RateMultiplier: multiplier,
-			ServiceTier:    serviceTier,
-			Resolver:       s.resolver,
+			Ctx:                     ctx,
+			Model:                   billingModel,
+			GroupID:                 &gid,
+			Tokens:                  tokens,
+			RequestCount:            1,
+			RateMultiplier:          multiplier,
+			ServiceTier:             serviceTier,
+			Resolver:                s.resolver,
+			TokenBillingMultipliers: &tokenBillingMultipliers,
 		})
 	}
-	return s.billingService.CalculateCostWithServiceTier(billingModel, tokens, multiplier, serviceTier)
+	return s.billingService.CalculateCostWithServiceTierAndTokenMultipliers(billingModel, tokens, multiplier, serviceTier, tokenBillingMultipliers)
 }
 
 func (s *OpenAIGatewayService) calculateOpenAIImageCost(
@@ -5917,20 +5921,22 @@ func (s *OpenAIGatewayService) calculateOpenAIImageCost(
 	apiKey *APIKey,
 	result *OpenAIForwardResult,
 	multiplier float64,
+	tokenBillingMultipliers TokenBillingMultipliers,
 ) *CostBreakdown {
 	sizeTier := NormalizeImageBillingTierOrDefault(result.ImageSize)
 	if resolved := s.resolveOpenAIChannelPricing(ctx, billingModel, apiKey); resolved != nil &&
 		(resolved.Mode == BillingModePerRequest || resolved.Mode == BillingModeImage) {
 		gid := apiKey.Group.ID
 		cost, err := s.billingService.CalculateCostUnified(CostInput{
-			Ctx:            ctx,
-			Model:          billingModel,
-			GroupID:        &gid,
-			RequestCount:   result.ImageCount,
-			SizeTier:       sizeTier,
-			RateMultiplier: multiplier,
-			Resolver:       s.resolver,
-			Resolved:       resolved,
+			Ctx:                     ctx,
+			Model:                   billingModel,
+			GroupID:                 &gid,
+			RequestCount:            result.ImageCount,
+			SizeTier:                sizeTier,
+			RateMultiplier:          multiplier,
+			Resolver:                s.resolver,
+			Resolved:                resolved,
+			TokenBillingMultipliers: &tokenBillingMultipliers,
 		})
 		if err == nil {
 			return cost

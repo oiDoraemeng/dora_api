@@ -1,0 +1,13 @@
+﻿# User-specific token billing multipliers.
+# Priority: user override field > global BILLING_*_TOKEN_BILLING_MULTIPLIER > 1.0.
+# Fields can be omitted; omitted fields fall back to the global multiplier.
+users:
+  - user_id: 1001
+    input: 1.5
+    output: 1.8
+    cache: 2.0
+
+  # Example: only override input tokens for this user.
+  # output/cache will keep using the global env values.
+  - user_id: 1002
+    input: 1.2
