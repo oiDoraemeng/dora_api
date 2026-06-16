@@ -5035,7 +5035,7 @@ func (s *OpenAIGatewayService) replaceModelInSSELine(line, fromModel, toModel st
 	}
 
 	// 使用 gjson 精确检查 model 字段，避免全量 JSON 反序列化
-	if m := gjson.Get(data, "model"); m.Exists() && m.Str == fromModel {
+	if m := gjson.Get(data, "model"); m.Exists() && shouldReplaceOpenAIResponseModelValue(m.Str, fromModel) {
 		newData, err := sjson.Set(data, "model", toModel)
 		if err != nil {
 			return line
@@ -5044,7 +5044,7 @@ func (s *OpenAIGatewayService) replaceModelInSSELine(line, fromModel, toModel st
 	}
 
 	// 检查嵌套的 response.model 字段
-	if m := gjson.Get(data, "response.model"); m.Exists() && m.Str == fromModel {
+	if m := gjson.Get(data, "response.model"); m.Exists() && shouldReplaceOpenAIResponseModelValue(m.Str, fromModel) {
 		newData, err := sjson.Set(data, "response.model", toModel)
 		if err != nil {
 			return line
@@ -5346,6 +5346,29 @@ func extractCodexFinalResponse(body string) ([]byte, bool) {
 		return finalResponse, true
 	}
 	return nil, false
+}
+
+func shouldReplaceOpenAIResponseModelValue(actualModel, fromModel string) bool {
+	actualModel = strings.TrimSpace(actualModel)
+	fromModel = strings.TrimSpace(fromModel)
+	if actualModel == "" || fromModel == "" {
+		return false
+	}
+	if actualModel == fromModel {
+		return true
+	}
+	if !strings.HasPrefix(actualModel, fromModel+"-") {
+		return false
+	}
+	suffix := strings.TrimPrefix(actualModel, fromModel+"-")
+	if len(suffix) < len("2006-01-02") {
+		return false
+	}
+	datePrefix := suffix[:len("2006-01-02")]
+	if _, err := time.Parse("2006-01-02", datePrefix); err != nil {
+		return false
+	}
+	return len(suffix) == len("2006-01-02") || suffix[len("2006-01-02")] == '-'
 }
 
 func normalizeResponsesStreamingTerminalOutput(data []byte, acc *apicompat.BufferedResponseAccumulator, imageOutputs []json.RawMessage) ([]byte, bool) {
@@ -5711,7 +5734,7 @@ func appendOpenAIResponsesRequestPathSuffix(baseURL, suffix string) string {
 
 func (s *OpenAIGatewayService) replaceModelInResponseBody(body []byte, fromModel, toModel string) []byte {
 	// 使用 gjson/sjson 精确替换 model 字段，避免全量 JSON 反序列化
-	if m := gjson.GetBytes(body, "model"); m.Exists() && m.Str == fromModel {
+	if m := gjson.GetBytes(body, "model"); m.Exists() && shouldReplaceOpenAIResponseModelValue(m.Str, fromModel) {
 		newBody, err := sjson.SetBytes(body, "model", toModel)
 		if err != nil {
 			return body

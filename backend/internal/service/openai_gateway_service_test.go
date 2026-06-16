@@ -2416,6 +2416,20 @@ func TestReplaceModelInResponseBody(t *testing.T) {
 			to:       "alias",
 			expected: `{"model":"alias","usage":{"prompt_tokens":10,"completion_tokens":20},"choices":[{"message":{"role":"assistant","content":"hello"}}]}`,
 		},
+		{
+			name:     "替换带日期后缀的 model",
+			body:     `{"id":"resp_123","model":"gpt-5.4-mini-2026-03-17","output":[]}`,
+			from:     "gpt-5.4-mini",
+			to:       "gpt-5.4",
+			expected: `{"id":"resp_123","model":"gpt-5.4","output":[]}`,
+		},
+		{
+			name:     "不替换非日期后缀 model",
+			body:     `{"id":"resp_123","model":"gpt-5.4-mini-high","output":[]}`,
+			from:     "gpt-5.4-mini",
+			to:       "gpt-5.4",
+			expected: `{"id":"resp_123","model":"gpt-5.4-mini-high","output":[]}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -2424,6 +2438,22 @@ func TestReplaceModelInResponseBody(t *testing.T) {
 			require.Equal(t, tt.expected, string(got))
 		})
 	}
+}
+
+func TestReplaceModelInSSELine_RewritesVersionedResponseModel(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+
+	got := svc.replaceModelInSSELine(
+		`data: {"type":"response.completed","response":{"id":"resp_123","model":"gpt-5.4-mini-2026-03-17"}}`,
+		"gpt-5.4-mini",
+		"gpt-5.4",
+	)
+
+	require.Equal(
+		t,
+		`data: {"type":"response.completed","response":{"id":"resp_123","model":"gpt-5.4"}}`,
+		got,
+	)
 }
 
 func TestExtractOpenAISSEDataLine(t *testing.T) {
