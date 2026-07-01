@@ -481,6 +481,16 @@ func TestRewriteOpenAIImagesModel_StripsLocalBackendField(t *testing.T) {
 	require.Equal(t, "gpt-image-2", gjson.GetBytes(rewritten, "model").String())
 }
 
+func TestAccountSupportsOpenAIImageCapability_EmptyRequirementDoesNotRejectGrok(t *testing.T) {
+	account := &Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+	}
+
+	require.True(t, account.SupportsOpenAIImageCapability(""))
+	require.False(t, account.SupportsOpenAIImageCapability(OpenAIImagesCapabilityBasic))
+}
+
 func TestAccountSupportsOpenAIEndpointCapability(t *testing.T) {
 	t.Run("OpenAI APIKey 默认兼容 chat 和 embeddings", func(t *testing.T) {
 		account := &Account{
