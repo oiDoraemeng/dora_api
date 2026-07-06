@@ -6,8 +6,7 @@
       class="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700"
       :title="currentLocale?.name"
     >
-      <span class="text-base">{{ currentLocale?.flag }}</span>
-      <span class="hidden sm:inline">{{ currentLocale?.code.toUpperCase() }}</span>
+      <span class="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">{{ currentLocale?.region }}</span>
       <Icon
         name="chevronDown"
         size="xs"
@@ -19,7 +18,7 @@
     <transition name="dropdown">
       <div
         v-if="isOpen"
-        class="absolute right-0 z-50 mt-1 w-32 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-700 dark:bg-dark-800"
+        class="absolute right-0 z-50 mt-1 w-36 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-700 dark:bg-dark-800"
       >
         <button
           v-for="locale in availableLocales"
@@ -32,8 +31,10 @@
               locale.code === currentLocaleCode
           }"
         >
-          <span class="text-base">{{ locale.flag }}</span>
-          <span>{{ locale.name }}</span>
+          <span class="w-6 flex-shrink-0 text-left text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">
+            {{ locale.region }}
+          </span>
+          <span class="truncate">{{ locale.name }}</span>
           <Icon v-if="locale.code === currentLocaleCode" name="check" size="sm" class="ml-auto text-primary-500" />
         </button>
       </div>

@@ -79,6 +79,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
+import { getIntlLocale } from '@/i18n'
 
 interface DatePreset {
   labelKey: string
@@ -236,8 +237,7 @@ const displayValue = computed(() => {
 
 const formatDate = (dateStr: string): string => {
   const date = new Date(dateStr + 'T00:00:00')
-  const dateLocale = locale.value === 'zh' ? 'zh-CN' : 'en-US'
-  return date.toLocaleDateString(dateLocale, { month: 'short', day: 'numeric' })
+  return date.toLocaleDateString(getIntlLocale(locale.value), { month: 'short', day: 'numeric' })
 }
 
 const isPresetActive = (preset: DatePreset): boolean => {

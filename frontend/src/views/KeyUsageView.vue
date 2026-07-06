@@ -424,6 +424,7 @@ import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { resolveDisplaySiteName } from '@/utils/brand'
 import { buildGatewayUrl } from '@/api/client'
+import { getIntlLocale, isChineseLocale } from '@/i18n'
 
 const { t, locale } = useI18n()
 const appStore = useAppStore()
@@ -446,6 +447,7 @@ function toggleTheme() {
 }
 
 const currentYear = computed(() => new Date().getFullYear())
+const isZhLocale = computed(() => isChineseLocale(locale.value))
 
 // ==================== Key Query State ====================
 
@@ -709,7 +711,7 @@ const detailRows = computed<DetailRow[]>(() => {
       })
     }
     if (data.rate_limits) {
-      const windowMap: Record<string, string> = { '5h': '5H', '1d': locale.value === 'zh' ? '日' : 'D', '7d': '7D' }
+      const windowMap: Record<string, string> = { '5h': '5H', '1d': isZhLocale.value ? '日' : 'D', '7d': '7D' }
       for (const rl of data.rate_limits) {
         const pct = rl.limit > 0 ? (rl.used / rl.limit) * 100 : 0
         let valueStr = `${usd(rl.used)} / ${usd(rl.limit)}`
@@ -737,21 +739,21 @@ const detailRows = computed<DetailRow[]>(() => {
         const pct = (sub.daily_usage_usd / sub.daily_limit_usd) * 100
         rows.push({
           iconBg: 'bg-primary-500/10', iconColor: 'text-primary-500', iconSvg: ICON_DOLLAR,
-          label: `${t('keyUsage.usedQuota')} (${locale.value === 'zh' ? '日' : 'D'})`, value: `${usd(sub.daily_usage_usd)} / ${usd(sub.daily_limit_usd)}`, valueClass: getUsageColor(pct),
+          label: `${t('keyUsage.usedQuota')} (${isZhLocale.value ? '日' : 'D'})`, value: `${usd(sub.daily_usage_usd)} / ${usd(sub.daily_limit_usd)}`, valueClass: getUsageColor(pct),
         })
       }
       if (sub.weekly_limit_usd > 0) {
         const pct = (sub.weekly_usage_usd / sub.weekly_limit_usd) * 100
         rows.push({
           iconBg: 'bg-indigo-500/10', iconColor: 'text-indigo-500', iconSvg: ICON_DOLLAR,
-          label: `${t('keyUsage.usedQuota')} (${locale.value === 'zh' ? '周' : 'W'})`, value: `${usd(sub.weekly_usage_usd)} / ${usd(sub.weekly_limit_usd)}`, valueClass: getUsageColor(pct),
+          label: `${t('keyUsage.usedQuota')} (${isZhLocale.value ? '周' : 'W'})`, value: `${usd(sub.weekly_usage_usd)} / ${usd(sub.weekly_limit_usd)}`, valueClass: getUsageColor(pct),
         })
       }
       if (sub.monthly_limit_usd > 0) {
         const pct = (sub.monthly_usage_usd / sub.monthly_limit_usd) * 100
         rows.push({
           iconBg: 'bg-emerald-500/10', iconColor: 'text-emerald-500', iconSvg: ICON_DOLLAR,
-          label: `${t('keyUsage.usedQuota')} (${locale.value === 'zh' ? '月' : 'M'})`, value: `${usd(sub.monthly_usage_usd)} / ${usd(sub.monthly_limit_usd)}`, valueClass: getUsageColor(pct),
+          label: `${t('keyUsage.usedQuota')} (${isZhLocale.value ? '月' : 'M'})`, value: `${usd(sub.monthly_usage_usd)} / ${usd(sub.monthly_limit_usd)}`, valueClass: getUsageColor(pct),
         })
       }
       if (sub.expires_at) {
@@ -842,8 +844,7 @@ function fmtNum(val: number | null | undefined): string {
 function formatDate(iso: string | null | undefined): string {
   if (!iso) return '-'
   const d = new Date(iso)
-  const loc = locale.value === 'zh' ? 'zh-CN' : 'en-US'
-  return d.toLocaleDateString(loc, { year: 'numeric', month: 'long', day: 'numeric' })
+  return d.toLocaleDateString(getIntlLocale(locale.value), { year: 'numeric', month: 'long', day: 'numeric' })
 }
 
 function getBrowserTimezone(): string {

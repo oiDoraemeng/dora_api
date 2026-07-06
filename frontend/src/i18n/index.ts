@@ -1,6 +1,6 @@
 import { createI18n } from 'vue-i18n'
 
-type LocaleCode = 'en' | 'zh'
+export type LocaleCode = 'en' | 'zh' | 'zh-Hant' | 'fr' | 'ru' | 'ja' | 'vi'
 
 type LocaleMessages = Record<string, any>
 
@@ -9,11 +9,22 @@ const DEFAULT_LOCALE: LocaleCode = 'en'
 
 const localeLoaders: Record<LocaleCode, () => Promise<{ default: LocaleMessages }>> = {
   en: () => import('./locales/en'),
-  zh: () => import('./locales/zh')
+  zh: () => import('./locales/zh'),
+  'zh-Hant': () => import('./locales/zh-Hant'),
+  fr: () => import('./locales/fr'),
+  ru: () => import('./locales/ru'),
+  ja: () => import('./locales/ja'),
+  vi: () => import('./locales/vi')
 }
 
 function isLocaleCode(value: string): value is LocaleCode {
-  return value === 'en' || value === 'zh'
+  return value === 'en' ||
+    value === 'zh' ||
+    value === 'zh-Hant' ||
+    value === 'fr' ||
+    value === 'ru' ||
+    value === 'ja' ||
+    value === 'vi'
 }
 
 function getDefaultLocale(): LocaleCode {
@@ -23,6 +34,9 @@ function getDefaultLocale(): LocaleCode {
   }
 
   const browserLang = navigator.language.toLowerCase()
+  if (browserLang === 'zh-tw' || browserLang === 'zh-hk' || browserLang === 'zh-mo' || browserLang.startsWith('zh-hant')) {
+    return 'zh-Hant'
+  }
   if (browserLang.startsWith('zh')) {
     return 'zh'
   }
@@ -91,9 +105,24 @@ export function getLocale(): LocaleCode {
   return isLocaleCode(current) ? current : DEFAULT_LOCALE
 }
 
+export function isChineseLocale(locale: string = getLocale()): boolean {
+  return locale.toLowerCase().startsWith('zh')
+}
+
+export function getIntlLocale(locale: string = getLocale()): string {
+  if (locale === 'zh') return 'zh-CN'
+  if (locale === 'zh-Hant') return 'zh-TW'
+  return locale
+}
+
 export const availableLocales = [
-  { code: 'en', name: 'English', flag: '🇺🇸' },
-  { code: 'zh', name: '中文', flag: '🇨🇳' }
+  { code: 'zh', region: 'CN', name: '简体中文' },
+  { code: 'en', region: 'US', name: 'English' },
+  { code: 'zh-Hant', region: 'TW', name: '繁體中文' },
+  { code: 'fr', region: 'FR', name: 'Français' },
+  { code: 'ru', region: 'RU', name: 'Русский' },
+  { code: 'ja', region: 'JP', name: '日本語' },
+  { code: 'vi', region: 'VN', name: 'Tiếng Việt' }
 ] as const
 
 export default i18n
