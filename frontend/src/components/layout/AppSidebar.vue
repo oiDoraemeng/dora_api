@@ -202,6 +202,8 @@ interface NavItem {
   icon: unknown
   iconSvg?: string
   hideInSimpleMode?: boolean
+  sortOrder?: number
+  sortTie?: number
   children?: NavItem[]
   /**
    * When true, the parent item only toggles the expand/collapse state and
@@ -684,6 +686,47 @@ const flagRiskControl = makeSidebarFlag(FeatureFlags.riskControl)
 const flagOpsMonitoring = () => adminSettingsStore.opsMonitoringEnabled
 const flagAdminPayment = () => adminSettingsStore.paymentEnabled
 
+const SELF_NAV_MAX_SORT_ORDER = 11
+const CUSTOM_MENU_SORT_BASE = 1000
+const CUSTOM_MENU_SORT_STEP = 100
+
+function decodeCustomMenuSortOrder(value: unknown, fallbackTie = 0): { sortOrder: number; sortTie: number } {
+  const raw = Number(value)
+  if (Number.isFinite(raw) && raw >= CUSTOM_MENU_SORT_BASE) {
+    const encoded = Math.max(0, Math.round(raw - CUSTOM_MENU_SORT_BASE))
+    return {
+      sortOrder: normalizeMenuSortOrder(Math.floor(encoded / CUSTOM_MENU_SORT_STEP)),
+      sortTie: (encoded % CUSTOM_MENU_SORT_STEP) + 1,
+    }
+  }
+  return {
+    sortOrder: SELF_NAV_MAX_SORT_ORDER,
+    sortTie: Number.isFinite(raw) ? raw + 1 : fallbackTie + 1,
+  }
+}
+
+function normalizeMenuSortOrder(value: unknown, fallback = SELF_NAV_MAX_SORT_ORDER): number {
+  const order = Number(value)
+  if (!Number.isFinite(order)) return fallback
+  return Math.min(Math.max(Math.round(order), 0), SELF_NAV_MAX_SORT_ORDER)
+}
+
+function compareCustomMenuItems(a: { sort_order: number }, b: { sort_order: number }): number {
+  const left = decodeCustomMenuSortOrder(a.sort_order)
+  const right = decodeCustomMenuSortOrder(b.sort_order)
+  const orderDiff = left.sortOrder - right.sortOrder
+  if (orderDiff !== 0) return orderDiff
+  return left.sortTie - right.sortTie
+}
+
+function sortSelfNavItems(items: NavItem[]): NavItem[] {
+  return [...items].sort((a, b) => {
+    const orderDiff = normalizeMenuSortOrder(a.sortOrder) - normalizeMenuSortOrder(b.sortOrder)
+    if (orderDiff !== 0) return orderDiff
+    return (a.sortTie ?? 0) - (b.sortTie ?? 0)
+  })
+}
+
 // buildSelfNavItems 构造用户自己的导航项（用户端主菜单和管理员的"我的账户"子菜单共享这组声明）。
 // withDashboard=true 时包含仪表盘（用户端），false 时不含（管理员的个人区已经有独立仪表盘入口）。
 //
@@ -692,28 +735,33 @@ const flagAdminPayment = () => adminSettingsStore.paymentEnabled
 function buildSelfNavItems(withDashboard: boolean): NavItem[] {
   const items: NavItem[] = []
   if (withDashboard) {
-    items.push({ path: '/dashboard', label: t('nav.dashboard'), icon: DashboardIcon })
+    items.push({ path: '/dashboard', label: t('nav.dashboard'), icon: DashboardIcon, sortOrder: 0, sortTie: 0 })
   }
   items.push(
-    { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
-    { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
-    { path: '/available-channels', label: t('nav.availableChannels'), icon: ChannelIcon, hideInSimpleMode: true, featureFlag: flagAvailableChannels },
-    { path: '/images', label: t('nav.imageGeneration'), icon: SparklesIcon, hideInSimpleMode: true },
-    { path: '/monitor', label: t('nav.channelStatus'), icon: SignalIcon, featureFlag: flagChannelMonitor },
-    { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
-    { path: '/purchase', label: t('nav.buySubscription'), icon: RechargeSubscriptionIcon, hideInSimpleMode: true, featureFlag: flagPayment },
-    { path: '/orders', label: t('nav.myOrders'), icon: OrderListIcon, hideInSimpleMode: true, featureFlag: flagPayment },
-    { path: '/redeem', label: t('nav.redeem'), icon: GiftIcon, hideInSimpleMode: true },
-    { path: '/affiliate', label: t('nav.affiliate'), icon: UsersIcon, hideInSimpleMode: true, featureFlag: flagAffiliate },
-    { path: '/profile', label: t('nav.profile'), icon: UserIcon },
-    ...customMenuItemsForUser.value.map((item): NavItem => ({
-      path: `/custom/${item.id}`,
-      label: item.label,
-      icon: null,
-      iconSvg: item.icon_svg,
-    })),
+    { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon, sortOrder: 1, sortTie: 0 },
+    { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true, sortOrder: 2, sortTie: 0 },
+    { path: '/available-channels', label: t('nav.availableChannels'), icon: ChannelIcon, hideInSimpleMode: true, featureFlag: flagAvailableChannels, sortOrder: 3, sortTie: 0 },
+    { path: '/images', label: t('nav.imageGeneration'), icon: SparklesIcon, hideInSimpleMode: true, sortOrder: 4, sortTie: 0 },
+    { path: '/monitor', label: t('nav.channelStatus'), icon: SignalIcon, featureFlag: flagChannelMonitor, sortOrder: 5, sortTie: 0 },
+    { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true, sortOrder: 6, sortTie: 0 },
+    { path: '/purchase', label: t('nav.buySubscription'), icon: RechargeSubscriptionIcon, hideInSimpleMode: true, featureFlag: flagPayment, sortOrder: 7, sortTie: 0 },
+    { path: '/orders', label: t('nav.myOrders'), icon: OrderListIcon, hideInSimpleMode: true, featureFlag: flagPayment, sortOrder: 8, sortTie: 0 },
+    { path: '/redeem', label: t('nav.redeem'), icon: GiftIcon, hideInSimpleMode: true, sortOrder: 9, sortTie: 0 },
+    { path: '/affiliate', label: t('nav.affiliate'), icon: UsersIcon, hideInSimpleMode: true, featureFlag: flagAffiliate, sortOrder: 10, sortTie: 0 },
+    { path: '/profile', label: t('nav.profile'), icon: UserIcon, sortOrder: 11, sortTie: 0 },
+    ...customMenuItemsForUser.value.map((item, index): NavItem => {
+      const sort = decodeCustomMenuSortOrder(item.sort_order, index)
+      return {
+        path: `/custom/${item.id}`,
+        label: item.label,
+        icon: null,
+        iconSvg: item.icon_svg,
+        sortOrder: sort.sortOrder,
+        sortTie: sort.sortTie,
+      }
+    }),
   )
-  return items
+  return sortSelfNavItems(items)
 }
 
 // finalizeNav 合并三重过滤：featureFlag 过滤 + simple 模式过滤。
@@ -735,7 +783,7 @@ const customMenuItemsForUser = computed(() => {
   const items = appStore.cachedPublicSettings?.custom_menu_items ?? []
   return items
     .filter((item) => item.visibility === 'user')
-    .sort((a, b) => a.sort_order - b.sort_order)
+    .sort(compareCustomMenuItems)
 })
 
 const customMenuItemsForAdmin = computed(() => {

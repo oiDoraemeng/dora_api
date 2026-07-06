@@ -5485,6 +5485,33 @@
                     </select>
                   </div>
 
+                  <!-- Sidebar position -->
+                  <div v-if="item.visibility === 'user'">
+                    <label
+                      class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                    >
+                      {{ t("admin.settings.customMenu.sidebarPosition") }}
+                    </label>
+                    <select
+                      :value="getCustomMenuSidebarPositionValue(index)"
+                      class="input text-sm"
+                      @change="updateCustomMenuSidebarPosition(index, $event)"
+                    >
+                      <option
+                        v-for="option in getCustomMenuSidebarPositionOptions(index)"
+                        :key="option.value"
+                        :value="option.value"
+                      >
+                        {{ option.label }}
+                      </option>
+                    </select>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t("admin.settings.customMenu.sidebarPositionHint")
+                      }}
+                    </p>
+                  </div>
+
                   <!-- URL (full width) -->
                   <div class="sm:col-span-2">
                     <label
@@ -8819,7 +8846,212 @@ async function setAndCopyOIDCRedirectUrl() {
   await copyToClipboard(url, t("admin.settings.oidc.redirectUrlSetAndCopied"));
 }
 
+const CUSTOM_MENU_SORT_BASE = 1000;
+const CUSTOM_MENU_SORT_STEP = 100;
+const CUSTOM_MENU_DEFAULT_SIDEBAR_POSITION = 11;
+
+type CustomMenuSidebarPositionOption = {
+  value: string;
+  label: string;
+};
+
+type CustomMenuSidebarAnchor = {
+  value: string;
+  label: string;
+  position: number;
+  tie: number;
+  sourceIndex: number;
+};
+
+const customMenuBuiltInSidebarPositionOptions = computed((): CustomMenuSidebarPositionOption[] => [
+  {
+    value: "builtin:0",
+    label: t("admin.settings.customMenu.sidebarPositionAfterDashboard"),
+  },
+  {
+    value: "builtin:1",
+    label: t("admin.settings.customMenu.sidebarPositionAfterApiKeys"),
+  },
+  {
+    value: "builtin:2",
+    label: t("admin.settings.customMenu.sidebarPositionAfterUsage"),
+  },
+  {
+    value: "builtin:3",
+    label: t("admin.settings.customMenu.sidebarPositionAfterAvailableChannels"),
+  },
+  {
+    value: "builtin:4",
+    label: t("admin.settings.customMenu.sidebarPositionAfterImages"),
+  },
+  {
+    value: "builtin:5",
+    label: t("admin.settings.customMenu.sidebarPositionAfterMonitor"),
+  },
+  {
+    value: "builtin:6",
+    label: t("admin.settings.customMenu.sidebarPositionAfterSubscriptions"),
+  },
+  {
+    value: "builtin:7",
+    label: t("admin.settings.customMenu.sidebarPositionAfterPurchase"),
+  },
+  {
+    value: "builtin:8",
+    label: t("admin.settings.customMenu.sidebarPositionAfterOrders"),
+  },
+  {
+    value: "builtin:9",
+    label: t("admin.settings.customMenu.sidebarPositionAfterRedeem"),
+  },
+  {
+    value: "builtin:10",
+    label: t("admin.settings.customMenu.sidebarPositionAfterAffiliate"),
+  },
+  {
+    value: "builtin:11",
+    label: t("admin.settings.customMenu.sidebarPositionAfterProfile"),
+  },
+]);
+
 // Custom menu item management
+function normalizeCustomMenuSidebarPosition(value: unknown): number {
+  const order = Number(value);
+  if (!Number.isFinite(order)) return CUSTOM_MENU_DEFAULT_SIDEBAR_POSITION;
+  return Math.min(Math.max(Math.round(order), 0), CUSTOM_MENU_DEFAULT_SIDEBAR_POSITION);
+}
+
+function decodeCustomMenuSortOrder(value: unknown, fallbackTie = 0) {
+  const raw = Number(value);
+  if (Number.isFinite(raw) && raw >= CUSTOM_MENU_SORT_BASE) {
+    const encoded = Math.max(0, Math.round(raw - CUSTOM_MENU_SORT_BASE));
+    return {
+      position: normalizeCustomMenuSidebarPosition(Math.floor(encoded / CUSTOM_MENU_SORT_STEP)),
+      tie: encoded % CUSTOM_MENU_SORT_STEP,
+    };
+  }
+  return {
+    position: CUSTOM_MENU_DEFAULT_SIDEBAR_POSITION,
+    tie: Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : fallbackTie,
+  };
+}
+
+function encodeCustomMenuSortOrder(position: number, tie: number): number {
+  return CUSTOM_MENU_SORT_BASE + normalizeCustomMenuSidebarPosition(position) * CUSTOM_MENU_SORT_STEP + Math.min(Math.max(Math.round(tie), 0), CUSTOM_MENU_SORT_STEP - 1);
+}
+
+function reindexCustomMenuItems() {
+  const tieByPosition = new Map<number, number>();
+  form.custom_menu_items.forEach((item, i) => {
+    if (item.visibility === "admin") {
+      item.sort_order = i;
+      return;
+    }
+    const decoded = decodeCustomMenuSortOrder(item.sort_order, i);
+    const tie = tieByPosition.get(decoded.position) ?? 0;
+    item.sort_order = encodeCustomMenuSortOrder(decoded.position, tie);
+    tieByPosition.set(decoded.position, tie + 1);
+  });
+}
+
+function getCustomMenuSidebarAnchors(excludeIndex?: number): CustomMenuSidebarAnchor[] {
+  return form.custom_menu_items
+    .map((item, sourceIndex) => ({ item, sourceIndex, ...decodeCustomMenuSortOrder(item.sort_order, sourceIndex) }))
+    .filter(({ item, sourceIndex }) => item.visibility === "user" && sourceIndex !== excludeIndex)
+    .sort((a, b) => {
+      const positionDiff = a.position - b.position;
+      if (positionDiff !== 0) return positionDiff;
+      const tieDiff = a.tie - b.tie;
+      if (tieDiff !== 0) return tieDiff;
+      return a.sourceIndex - b.sourceIndex;
+    })
+    .map(({ item, sourceIndex, position, tie }) => {
+      const fallbackLabel = t("admin.settings.customMenu.unnamedItem", { n: sourceIndex + 1 });
+      const label = item.label?.trim() || fallbackLabel;
+      return {
+        value: `custom:${sourceIndex}`,
+        label: t("admin.settings.customMenu.sidebarPositionAfterCustom", { label }),
+        position,
+        tie,
+        sourceIndex,
+      };
+    });
+}
+
+function getCustomMenuSidebarPositionOptions(index: number): CustomMenuSidebarPositionOption[] {
+  const customAnchors = getCustomMenuSidebarAnchors(index);
+  return customMenuBuiltInSidebarPositionOptions.value.flatMap((option) => {
+    const position = Number(option.value.replace("builtin:", ""));
+    return [
+      option,
+      ...customAnchors
+        .filter((anchor) => anchor.position === position)
+        .map(({ value, label }) => ({ value, label })),
+    ];
+  });
+}
+
+function getCustomMenuSidebarPositionValue(index: number): string {
+  const item = form.custom_menu_items[index];
+  if (!item) return `builtin:${CUSTOM_MENU_DEFAULT_SIDEBAR_POSITION}`;
+  const current = decodeCustomMenuSortOrder(item.sort_order, index);
+  const previousCustomAnchor = getCustomMenuSidebarAnchors(index)
+    .filter((anchor) => anchor.position === current.position && anchor.tie < current.tie)
+    .at(-1);
+  return previousCustomAnchor?.value ?? `builtin:${current.position}`;
+}
+
+function placeCustomMenuItemAfter(index: number, anchorValue: string) {
+  const item = form.custom_menu_items[index];
+  if (!item || item.visibility !== "user") return;
+
+  const visibleItems = form.custom_menu_items
+    .map((entry, sourceIndex) => ({ entry, sourceIndex, ...decodeCustomMenuSortOrder(entry.sort_order, sourceIndex) }))
+    .filter(({ entry }) => entry.visibility === "user")
+    .sort((a, b) => {
+      const positionDiff = a.position - b.position;
+      if (positionDiff !== 0) return positionDiff;
+      const tieDiff = a.tie - b.tie;
+      if (tieDiff !== 0) return tieDiff;
+      return a.sourceIndex - b.sourceIndex;
+    });
+
+  const currentIndex = visibleItems.findIndex((entry) => entry.sourceIndex === index);
+  const [current] = currentIndex >= 0 ? visibleItems.splice(currentIndex, 1) : [];
+  if (!current) return;
+
+  let targetPosition = CUSTOM_MENU_DEFAULT_SIDEBAR_POSITION;
+  let insertAt = visibleItems.length;
+
+  if (anchorValue.startsWith("builtin:")) {
+    targetPosition = normalizeCustomMenuSidebarPosition(anchorValue.replace("builtin:", ""));
+    insertAt = visibleItems.findIndex((entry) => entry.position >= targetPosition);
+    if (insertAt === -1) insertAt = visibleItems.length;
+  } else if (anchorValue.startsWith("custom:")) {
+    const anchorSourceIndex = Number(anchorValue.replace("custom:", ""));
+    const anchorIndex = visibleItems.findIndex((entry) => entry.sourceIndex === anchorSourceIndex);
+    if (anchorIndex >= 0) {
+      targetPosition = visibleItems[anchorIndex].position;
+      insertAt = anchorIndex + 1;
+    }
+  }
+
+  visibleItems.splice(insertAt, 0, { ...current, position: targetPosition });
+
+  const tieByPosition = new Map<number, number>();
+  visibleItems.forEach((entry) => {
+    const tie = tieByPosition.get(entry.position) ?? 0;
+    entry.entry.sort_order = encodeCustomMenuSortOrder(entry.position, tie);
+    tieByPosition.set(entry.position, tie + 1);
+  });
+}
+
+function updateCustomMenuSidebarPosition(index: number, event: Event) {
+  const target = event.target as HTMLSelectElement | null;
+  if (!target) return;
+  placeCustomMenuItemAfter(index, target.value);
+}
+
 function addMenuItem() {
   form.custom_menu_items.push({
     id: "",
@@ -8827,16 +9059,13 @@ function addMenuItem() {
     icon_svg: "",
     url: "",
     visibility: "user",
-    sort_order: form.custom_menu_items.length,
+    sort_order: encodeCustomMenuSortOrder(CUSTOM_MENU_DEFAULT_SIDEBAR_POSITION, form.custom_menu_items.length),
   });
 }
 
 function removeMenuItem(index: number) {
   form.custom_menu_items.splice(index, 1);
-  // Re-index sort_order
-  form.custom_menu_items.forEach((item, i) => {
-    item.sort_order = i;
-  });
+  reindexCustomMenuItems();
 }
 
 function moveMenuItem(index: number, direction: -1 | 1) {
@@ -8846,10 +9075,7 @@ function moveMenuItem(index: number, direction: -1 | 1) {
   const temp = items[index];
   items[index] = items[targetIndex];
   items[targetIndex] = temp;
-  // Re-index sort_order
-  items.forEach((item, i) => {
-    item.sort_order = i;
-  });
+  reindexCustomMenuItems();
 }
 
 // Custom endpoint management
