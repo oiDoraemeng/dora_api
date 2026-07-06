@@ -1563,7 +1563,7 @@ func setDefaults() {
 
 	// Server
 	viper.SetDefault("server.host", "0.0.0.0")
-	viper.SetDefault("server.port", 8200)
+	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.mode", "release")
 	viper.SetDefault("server.frontend_url", "")
 	viper.SetDefault("server.read_header_timeout", 30) // 30秒读取请求头
@@ -2927,7 +2927,7 @@ func GetServerAddress() string {
 	v.AutomaticEnv()
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.SetDefault("server.host", "0.0.0.0")
-	v.SetDefault("server.port", 8200)
+	v.SetDefault("server.port", 8080)
 
 	// Try to read config file (ignore errors if not found)
 	_ = v.ReadInConfig()

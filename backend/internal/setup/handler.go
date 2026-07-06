@@ -314,7 +314,7 @@ func install(c *gin.Context) {
 		req.Server.Host = "0.0.0.0"
 	}
 	if req.Server.Port == 0 {
-		req.Server.Port = 8200
+		req.Server.Port = 8080
 	}
 	if req.Server.Mode == "" {
 		req.Server.Mode = "release"
