@@ -19,7 +19,7 @@
               {{ tr('imageGeneration.noApiKeyHint', 'No active API key found. Create one in API Keys first.') }}
             </p>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ tr('imageGeneration.apiKeySwitchHint', 'When switching between GPT and Gemini image models, choose an API key that supports the matching platform.') }}
+              {{ tr('imageGeneration.apiKeySwitchHint', 'When switching between GPT, Gemini, and Grok image models, choose an API key that supports the matching platform.') }}
             </p>
           </div>
 
@@ -31,7 +31,7 @@
               :placeholder="tr('imageGeneration.modelPlaceholder', 'Select an image model')"
             />
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ tr('imageGeneration.modelHint', 'Supports GPT Image and Gemini Image models.') }}
+              {{ tr('imageGeneration.modelHint', 'Supports GPT Image, Gemini Image, and Grok Image models.') }}
             </p>
           </div>
 
@@ -200,7 +200,7 @@ import Icon from '@/components/icons/Icon.vue'
 import { keysAPI } from '@/api/keys'
 import { userChannelsAPI, type UserAvailableChannel } from '@/api/channels'
 import { imagesAPI } from '@/api/images'
-import type { ApiKey, SelectOption } from '@/types'
+import type { ApiKey, GroupPlatform, SelectOption } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import {
@@ -227,7 +227,7 @@ const { t } = useI18n()
 const appStore = useAppStore()
 const IMAGE_HISTORY_LIMIT = 24
 
-type ImageModelFamily = 'openai' | 'gemini' | 'other'
+type ImageModelFamily = 'openai' | 'gemini' | 'grok' | 'other'
 
 function tr(key: string, fallback: string): string {
   const text = t(key)
@@ -252,13 +252,19 @@ function isGeminiImageModel(name: string): boolean {
   return model.startsWith('imagen-') || (model.startsWith('gemini-') && model.includes('image'))
 }
 
+function isGrokImageModel(name: string): boolean {
+  const model = normalizeImageModelName(name)
+  return model === 'grok-imagine' || model.startsWith('grok-imagine-image')
+}
+
 function isImageGenerationModel(name: string): boolean {
-  return isOpenAIImageModel(name) || isGeminiImageModel(name)
+  return isOpenAIImageModel(name) || isGeminiImageModel(name) || isGrokImageModel(name)
 }
 
 function getImageModelFamily(name: string): ImageModelFamily {
   if (isOpenAIImageModel(name)) return 'openai'
   if (isGeminiImageModel(name)) return 'gemini'
+  if (isGrokImageModel(name)) return 'grok'
   return 'other'
 }
 
@@ -268,14 +274,55 @@ function getImageModelFamilyLabel(name: string): string {
       return tr('imageGeneration.modelFamilyOpenAI', 'OpenAI')
     case 'gemini':
       return tr('imageGeneration.modelFamilyGemini', 'Gemini')
+    case 'grok':
+      return tr('imageGeneration.modelFamilyGrok', 'Grok')
     default:
       return tr('imageGeneration.modelFamilyOther', 'Image')
   }
 }
 
+function getPlatformDisplayLabel(platform?: GroupPlatform): string {
+  switch (platform) {
+    case 'openai':
+      return tr('imageGeneration.platformOpenAI', 'OpenAI')
+    case 'gemini':
+      return tr('imageGeneration.platformGemini', 'Gemini')
+    case 'grok':
+      return tr('imageGeneration.platformGrok', 'Grok')
+    case 'anthropic':
+      return tr('imageGeneration.platformAnthropic', 'Anthropic')
+    case 'antigravity':
+      return tr('imageGeneration.platformAntigravity', 'Antigravity')
+    default:
+      return tr('imageGeneration.platformUnknown', 'Unknown')
+  }
+}
+
+function getImageModelDisplayLabel(name: string): string {
+  const family = getImageModelFamilyLabel(name)
+  if (getImageModelFamily(name) === 'grok') {
+    return `${family} - ${name}`
+  }
+  return `${family} - ${name}`
+}
+
+function getApiKeyGroupDisplayLabel(item: ApiKey): string {
+  const platformLabel = getPlatformDisplayLabel(item.group?.platform)
+  const groupName = item.group?.name?.trim() || (item.group_id ? `#${item.group_id}` : tr('imageGeneration.apiKeyUngrouped', 'Ungrouped'))
+  if (platformLabel === tr('imageGeneration.platformUnknown', 'Unknown')) {
+    return groupName
+  }
+  return `${platformLabel} / ${groupName}`
+}
+
+function getApiKeyOptionLabel(item: ApiKey): string {
+  return `${item.name} [${getApiKeyGroupDisplayLabel(item)}] (${maskApiKey(item.key)})`
+}
+
 function getImageModelSortRank(name: string): number {
   if (isOpenAIImageModel(name)) return 0
   if (isGeminiImageModel(name)) return 1
+  if (isGrokImageModel(name)) return 2
   return 9
 }
 
@@ -285,8 +332,11 @@ function compareImageModels(a: string, b: string): number {
   return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
 }
 
-function getGenerationBackendLabel(value: string): string {
+function getGenerationBackendLabel(value: string, modelFamily: ImageModelFamily = 'other'): string {
   if (value === 'openai_images') {
+    if (modelFamily === 'grok') {
+      return tr('imageGeneration.backendGrokImages', 'Grok Images API')
+    }
     return tr('imageGeneration.backendOpenAIImages', 'OpenAI Images API (recommended)')
   }
   if (value === 'chatgpt2api') {
@@ -331,6 +381,7 @@ let generationPhaseTimer: number | null = null
 const selectedModelName = computed(() => normalizeTextOption(selectedModel.value))
 const selectedModelFamily = computed(() => getImageModelFamily(selectedModelName.value))
 const isGeminiSelectedModel = computed(() => selectedModelFamily.value === 'gemini')
+const isGrokSelectedModel = computed(() => selectedModelFamily.value === 'grok')
 const defaultGenerationBackend = computed(() => isGeminiSelectedModel.value ? 'gemini_native' : 'openai_images')
 
 const sizeOptions: SelectOption[] = [
@@ -360,6 +411,11 @@ const generationBackendOptions = computed<SelectOption[]>(() => {
       { value: 'gemini_native', label: tr('imageGeneration.backendGeminiNative', 'Gemini Native API') },
     ]
   }
+  if (isGrokSelectedModel.value) {
+    return [
+      { value: 'openai_images', label: tr('imageGeneration.backendGrokImages', 'Grok Images API') },
+    ]
+  }
   return [
     { value: 'openai_images', label: tr('imageGeneration.backendOpenAIImages', 'OpenAI Images API (recommended)') },
     { value: 'chatgpt2api', label: tr('imageGeneration.backendChatGPTWeb', 'ChatGPT Web') },
@@ -369,7 +425,7 @@ const generationBackendOptions = computed<SelectOption[]>(() => {
 const apiKeyOptions = computed<SelectOption[]>(() => {
   return apiKeys.value.map((item) => ({
     value: item.key,
-    label: `${item.name} (${maskApiKey(item.key)})`
+    label: getApiKeyOptionLabel(item)
   }))
 })
 
@@ -390,11 +446,19 @@ const discoveredImageModels = computed(() => {
 })
 
 const modelOptions = computed<SelectOption[]>(() => {
-  const fallbackModels = ['gpt-image-2', 'gpt-image-1', 'gemini-3.1-flash-image', 'gemini-2.5-flash-image']
+  const fallbackModels = [
+    'gpt-image-2',
+    'gpt-image-1',
+    'gemini-3.1-flash-image',
+    'gemini-2.5-flash-image',
+    'grok-imagine',
+    'grok-imagine-image',
+    'grok-imagine-image-quality'
+  ]
   const models = discoveredImageModels.value.length > 0 ? discoveredImageModels.value : fallbackModels.sort(compareImageModels)
   return models.map((name) => ({
     value: name,
-    label: `${getImageModelFamilyLabel(name)} · ${name}`
+    label: getImageModelDisplayLabel(name)
   }))
 })
 
@@ -405,12 +469,15 @@ const activeApiKey = computed(() => {
 
 const selectedModelProviderLabel = computed(() => getImageModelFamilyLabel(selectedModelName.value))
 const selectedBackendValue = computed(() => normalizeTextOption(selectedGenerationBackend.value || defaultGenerationBackend.value))
-const selectedBackendLabel = computed(() => getGenerationBackendLabel(selectedBackendValue.value))
+const selectedBackendLabel = computed(() => getGenerationBackendLabel(selectedBackendValue.value, selectedModelFamily.value))
 const backendHintText = computed(() => {
   if (isGeminiSelectedModel.value) {
     return tr('imageGeneration.backendGeminiHint', 'Gemini image models automatically use Gemini Native API. Please use an API key from a Gemini-capable group.')
   }
-  return tr('imageGeneration.backendHint', 'OpenAI Images API is recommended. ChatGPT Web remains available for OAuth/free account pools.')
+  if (isGrokSelectedModel.value) {
+    return tr('imageGeneration.backendGrokHint', 'Grok image models automatically use the Grok images endpoint. Please use an API key from a Grok-capable group.')
+  }
+  return tr('imageGeneration.backendHint', 'Supports GPT, Gemini, and Grok image models. OpenAI Images API is recommended for GPT, while ChatGPT Web remains available for OAuth/free account pools.')
 })
 const selectedSizeLabel = computed(() => normalizeTextOption(selectedSize.value || '1024x1024'))
 const selectedCountNumber = computed(() => {
@@ -443,7 +510,7 @@ const resultMetaText = computed(() => {
   if (!activeHistory.value) {
     return tr('imageGeneration.resultMetaEmpty', 'No image generated yet')
   }
-  return `${activeHistory.value.model} / ${activeHistory.value.size} / ${getGenerationBackendLabel(activeHistory.value.backend)}`
+  return `${activeHistory.value.model} / ${activeHistory.value.size} / ${getGenerationBackendLabel(activeHistory.value.backend, getImageModelFamily(activeHistory.value.model))}`
 })
 
 const generationMessages = computed(() => {
@@ -728,6 +795,9 @@ watch(selectedModelFamily, (family, previousFamily) => {
   if (!modelFamilyToastReady || family === previousFamily) return
   if (family === 'gemini') {
     appStore.showInfo(tr('imageGeneration.switchToGeminiKeyToast', 'Switched to a Gemini image model. Please switch to a Gemini group API key.'), 5000)
+  }
+  if (family === 'grok') {
+    appStore.showInfo(tr('imageGeneration.switchToGrokKeyToast', 'Switched to a Grok image model. Please switch to a Grok group API key.'), 5000)
   }
   if (family === 'openai') {
     appStore.showInfo(tr('imageGeneration.switchToGPTKeyToast', 'Switched to a GPT image model. Please switch to a GPT/OpenAI group API key.'), 5000)
