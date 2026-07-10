@@ -383,6 +383,12 @@ const selectedModelFamily = computed(() => getImageModelFamily(selectedModelName
 const isGeminiSelectedModel = computed(() => selectedModelFamily.value === 'gemini')
 const isGrokSelectedModel = computed(() => selectedModelFamily.value === 'grok')
 const defaultGenerationBackend = computed(() => isGeminiSelectedModel.value ? 'gemini_native' : 'openai_images')
+const defaultQualityByFamily: Record<ImageModelFamily, string> = {
+  openai: 'auto',
+  gemini: 'auto',
+  grok: 'medium',
+  other: 'auto'
+}
 
 const sizeOptions: SelectOption[] = [
   { value: '1024x1024', label: '1K · 1024×1024' },
@@ -392,12 +398,21 @@ const sizeOptions: SelectOption[] = [
   { value: '3840x2160', label: '4K · 3840×2160' },
 ]
 
-const qualityOptions: SelectOption[] = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' },
-]
+const qualityOptions = computed<SelectOption[]>(() => {
+  if (isGrokSelectedModel.value) {
+    return [
+      { value: 'low', label: 'Low' },
+      { value: 'medium', label: 'Medium' },
+      { value: 'high', label: 'High' },
+    ]
+  }
+  return [
+    { value: 'auto', label: 'Auto' },
+    { value: 'low', label: 'Low' },
+    { value: 'medium', label: 'Medium' },
+    { value: 'high', label: 'High' },
+  ]
+})
 
 const countOptions: SelectOption[] = [
   { value: 1, label: `1 ${tr('imageGeneration.countUnit', 'images')}` },
@@ -786,6 +801,18 @@ watch(
     const selectedOption = options.find((item) => normalizeTextOption(item.value) === current)
     if (!selectedOption) {
       selectedGenerationBackend.value = options[0]?.value || defaultGenerationBackend.value
+    }
+  },
+  { immediate: true }
+)
+
+watch(
+  qualityOptions,
+  (options) => {
+    const current = normalizeTextOption(selectedQuality.value).toLowerCase()
+    const values = new Set(options.map((item) => normalizeTextOption(item.value).toLowerCase()))
+    if (!current || !values.has(current)) {
+      selectedQuality.value = defaultQualityByFamily[selectedModelFamily.value] || 'auto'
     }
   },
   { immediate: true }

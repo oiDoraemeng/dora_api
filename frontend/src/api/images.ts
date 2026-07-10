@@ -102,6 +102,23 @@ function normalizeGeminiModelName(value: string): string {
   return value.trim().replace(/^models\//i, '')
 }
 
+function normalizeImageModelName(value: string): string {
+  return value.trim().toLowerCase().replace(/^models\//i, '')
+}
+
+function isGrokImageModel(value: string): boolean {
+  const model = normalizeImageModelName(value)
+  return model === 'grok-imagine' || model.startsWith('grok-imagine-image')
+}
+
+function normalizeImageQuality(request: ImageGenerationRequest): string {
+  const quality = String(request.quality || '').trim().toLowerCase()
+  if (isGrokImageModel(request.model)) {
+    return ['low', 'medium', 'high'].includes(quality) ? quality : 'medium'
+  }
+  return quality || 'auto'
+}
+
 function parseSizeDimensions(value: string | undefined): { width: number; height: number } | null {
   const match = String(value || '').match(/(\d+)\s*x\s*(\d+)/i)
   if (!match) return null
@@ -228,7 +245,7 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
     task_id: request.taskId,
     prompt: request.prompt,
     size: request.size || '1024x1024',
-    quality: request.quality || 'auto',
+    quality: normalizeImageQuality(request),
     n: request.n || 1,
     generation_backend: generationBackend,
     response_format: 'b64_json',
