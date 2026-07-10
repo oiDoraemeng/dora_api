@@ -125,6 +125,40 @@ func TestCalculateCostUnified_PerRequestMode(t *testing.T) {
 	require.Equal(t, string(BillingModePerRequest), cost.BillingMode)
 }
 
+func TestCalculateCostUnified_PerRequestContextIncludesScaledCacheCreationTokens(t *testing.T) {
+	bs := newTestBillingService()
+	resolver := NewModelPricingResolver(nil, bs)
+
+	cost, err := bs.CalculateCostUnified(CostInput{
+		Ctx:   context.Background(),
+		Model: "claude-sonnet-4",
+		Tokens: UsageTokens{
+			InputTokens:         100,
+			CacheCreationTokens: 40,
+			CacheReadTokens:     20,
+		},
+		RequestCount:   2,
+		RateMultiplier: 1.0,
+		Resolver:       resolver,
+		Resolved: &ResolvedPricing{
+			Mode: BillingModePerRequest,
+			RequestTiers: []PricingInterval{
+				{MinTokens: 0, MaxTokens: testPtrInt(199), PerRequestPrice: testPtrFloat64(0.05)},
+				{MinTokens: 200, MaxTokens: nil, PerRequestPrice: testPtrFloat64(0.10)},
+			},
+		},
+		TokenBillingMultipliers: &TokenBillingMultipliers{
+			Input:  1.0,
+			Output: 1.0,
+			Cache:  2.0,
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cost)
+	require.InDelta(t, 0.20, cost.TotalCost, 1e-10)
+	require.InDelta(t, 0.20, cost.ActualCost, 1e-10)
+}
+
 func TestCalculateCostUnified_ImageMode(t *testing.T) {
 	cs := newTestChannelServiceWithCache(t, &channelCache{
 		pricingByGroupModel: map[channelModelKey]*ChannelModelPricing{
@@ -249,6 +283,50 @@ func TestCalculateCostUnified_UsesPreResolvedPricing(t *testing.T) {
 	// 2 * $0.07 = $0.14
 	require.InDelta(t, 0.14, cost.TotalCost, 1e-10)
 	require.Equal(t, string(BillingModePerRequest), cost.BillingMode)
+}
+
+func TestCalculateCostUnified_TokenContextIncludesScaledCacheCreationTokens(t *testing.T) {
+	bs := newTestBillingService()
+	resolver := NewModelPricingResolver(nil, bs)
+
+	cost, err := bs.CalculateCostUnified(CostInput{
+		Ctx:   context.Background(),
+		Model: "claude-sonnet-4",
+		Tokens: UsageTokens{
+			InputTokens:         100,
+			OutputTokens:        10,
+			CacheCreationTokens: 40,
+			CacheReadTokens:     20,
+		},
+		RateMultiplier: 1.0,
+		Resolver:       resolver,
+		Resolved: &ResolvedPricing{
+			Mode: BillingModeToken,
+			Intervals: []PricingInterval{
+				{
+					MinTokens:   0,
+					MaxTokens:   testPtrInt(199),
+					InputPrice:  testPtrFloat64(1e-6),
+					OutputPrice: testPtrFloat64(2e-6),
+				},
+				{
+					MinTokens:   200,
+					MaxTokens:   nil,
+					InputPrice:  testPtrFloat64(3e-6),
+					OutputPrice: testPtrFloat64(4e-6),
+				},
+			},
+		},
+		TokenBillingMultipliers: &TokenBillingMultipliers{
+			Input:  1.0,
+			Output: 1.0,
+			Cache:  2.0,
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cost)
+	require.InDelta(t, 100*3e-6, cost.InputCost, 1e-10)
+	require.InDelta(t, 10*4e-6, cost.OutputCost, 1e-10)
 }
 
 // ---------------------------------------------------------------------------
