@@ -219,7 +219,7 @@ func TestGetModelPricing_OpenAICompactAliasesFallback(t *testing.T) {
 		cacheRead   float64
 		longContext int
 	}{
-		{model: "gpt5.5", inputPrice: 2.5e-6, outputPrice: 15e-6, cacheRead: 0.25e-6, longContext: 272000},
+		{model: "gpt5.5", inputPrice: 5e-6, outputPrice: 30e-6, cacheRead: 0.5e-6, longContext: 272000},
 		{model: "openai/gpt5.4", inputPrice: 2.5e-6, outputPrice: 15e-6, cacheRead: 0.25e-6, longContext: 272000},
 		{model: "gpt5.4-mini", inputPrice: 7.5e-7, outputPrice: 4.5e-6, cacheRead: 7.5e-8, longContext: 0},
 		{model: "gpt5.3codexspark", inputPrice: 1.5e-6, outputPrice: 12e-6, cacheRead: 0.15e-6, longContext: 0},
@@ -236,6 +236,54 @@ func TestGetModelPricing_OpenAICompactAliasesFallback(t *testing.T) {
 			require.Equal(t, tt.longContext, pricing.LongContextInputThreshold)
 		})
 	}
+}
+
+func TestCalculateCost_OpenAIGPT55PriorityUsesOfficialFallbackPricing(t *testing.T) {
+	svc := newTestBillingService()
+
+	tokens := UsageTokens{
+		InputTokens:     1000,
+		CacheReadTokens: 200,
+		OutputTokens:    50,
+	}
+
+	cost, err := svc.CalculateCostWithServiceTier("gpt-5.5", tokens, 1.0, "priority")
+	require.NoError(t, err)
+
+	expectedInput := float64(tokens.InputTokens) * 12.5e-6
+	expectedCacheRead := float64(tokens.CacheReadTokens) * 1.25e-6
+	expectedOutput := float64(tokens.OutputTokens) * 75e-6
+	expectedTotal := expectedInput + expectedCacheRead + expectedOutput
+
+	require.InDelta(t, expectedInput, cost.InputCost, 1e-10)
+	require.InDelta(t, expectedCacheRead, cost.CacheReadCost, 1e-10)
+	require.InDelta(t, expectedOutput, cost.OutputCost, 1e-10)
+	require.InDelta(t, expectedTotal, cost.TotalCost, 1e-10)
+	require.InDelta(t, expectedTotal, cost.ActualCost, 1e-10)
+}
+
+func TestCalculateCost_OpenAIGPT55LongContextUsesOfficialFallbackPricing(t *testing.T) {
+	svc := newTestBillingService()
+
+	tokens := UsageTokens{
+		InputTokens:     300000,
+		CacheReadTokens: 1000,
+		OutputTokens:    4000,
+	}
+
+	cost, err := svc.CalculateCost("gpt-5.5", tokens, 1.0)
+	require.NoError(t, err)
+
+	expectedInput := float64(tokens.InputTokens) * 5e-6 * 2.0
+	expectedCacheRead := float64(tokens.CacheReadTokens) * 0.5e-6 * 2.0
+	expectedOutput := float64(tokens.OutputTokens) * 30e-6 * 1.5
+	expectedTotal := expectedInput + expectedCacheRead + expectedOutput
+
+	require.InDelta(t, expectedInput, cost.InputCost, 1e-10)
+	require.InDelta(t, expectedCacheRead, cost.CacheReadCost, 1e-10)
+	require.InDelta(t, expectedOutput, cost.OutputCost, 1e-10)
+	require.InDelta(t, expectedTotal, cost.TotalCost, 1e-10)
+	require.InDelta(t, expectedTotal, cost.ActualCost, 1e-10)
 }
 
 func TestGetModelPricing_OpenAIGPT54MiniFallback(t *testing.T) {

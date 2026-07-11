@@ -287,8 +287,19 @@ func (s *BillingService) initFallbackPricing() {
 		LongContextInputMultiplier:     openAIGPT54LongContextInputMultiplier,
 		LongContextOutputMultiplier:    openAIGPT54LongContextOutputMultiplier,
 	}
-	// GPT-5.5 / GPT-5.5 Pro 暂无独立定价，回退到 GPT-5.4。
-	s.fallbackPrices["gpt-5.5"] = s.fallbackPrices["gpt-5.4"]
+	s.fallbackPrices["gpt-5.5"] = &ModelPricing{
+		InputPricePerToken:             5e-6,    // $5 per MTok
+		InputPricePerTokenPriority:     12.5e-6, // $12.5 per MTok
+		OutputPricePerToken:            30e-6,   // $30 per MTok
+		OutputPricePerTokenPriority:    75e-6,   // $75 per MTok
+		CacheReadPricePerToken:         0.5e-6,  // $0.5 per MTok
+		CacheReadPricePerTokenPriority: 1.25e-6, // $1.25 per MTok
+		SupportsCacheBreakdown:         false,
+		LongContextInputThreshold:      openAIGPT54LongContextInputThreshold,
+		LongContextInputMultiplier:     openAIGPT54LongContextInputMultiplier,
+		LongContextOutputMultiplier:    openAIGPT54LongContextOutputMultiplier,
+	}
+	// GPT-5.5 Pro 仍暂时回退到 GPT-5.4。
 	s.fallbackPrices["gpt-5.5-pro"] = s.fallbackPrices["gpt-5.4"]
 
 	// OpenAI GPT-5.6 官方价格（USD/token）。缓存写入为输入价的 1.25 倍。
