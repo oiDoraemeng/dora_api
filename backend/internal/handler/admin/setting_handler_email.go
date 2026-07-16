@@ -2,6 +2,7 @@ package admin
 
 import (
 	"html"
+	"net/mail"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
@@ -86,6 +87,23 @@ type SendTestEmailRequest struct {
 	SMTPFrom     string `json:"smtp_from_email"`
 	SMTPFromName string `json:"smtp_from_name"`
 	SMTPUseTLS   bool   `json:"smtp_use_tls"`
+}
+
+const maxTargetedEmailRecipients = 500
+
+// TargetedEmailRequest is the administrator-authored email sent from the
+// targeted delivery tool. Recipients are deliberately supplied by the admin UI
+// so a selection can span multiple pages of the user list.
+type TargetedEmailRequest struct {
+	Recipients []string `json:"recipients" binding:"required,min=1,max=500"`
+	Subject    string   `json:"subject" binding:"required,max=200"`
+	HTML       string   `json:"html" binding:"required,max=200000"`
+}
+
+type TargetedEmailResult struct {
+	Sent   int      `json:"sent"`
+	Failed int      `json:"failed"`
+	Errors []string `json:"errors,omitempty"`
 }
 
 // SendTestEmail 发送测试邮件
@@ -185,6 +203,87 @@ func (h *SettingHandler) SendTestEmail(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{"message": "Test email sent successfully"})
+}
+
+// SendTargetedEmailTest sends the current targeted email draft to exactly one
+// recipient. It uses the saved SMTP configuration rather than form-local SMTP
+// settings, so the result matches a subsequent batch send.
+// POST /api/v1/admin/settings/targeted-email/test
+func (h *SettingHandler) SendTargetedEmailTest(c *gin.Context) {
+	var req TargetedEmailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if len(req.Recipients) != 1 {
+		response.BadRequest(c, "test send requires exactly one recipient")
+		return
+	}
+	if err := validateTargetedEmailRequest(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	if err := h.emailService.SendEmail(c.Request.Context(), req.Recipients[0], req.Subject, req.HTML); err != nil {
+		response.BadRequest(c, "Failed to send test email: "+err.Error())
+		return
+	}
+	response.Success(c, TargetedEmailResult{Sent: 1})
+}
+
+// SendTargetedEmailBatch sends an administrator-authored email to the selected
+// recipients. Sending continues after a per-recipient failure so the admin can
+// see a complete result and retry only failed addresses if needed.
+// POST /api/v1/admin/settings/targeted-email/batch
+func (h *SettingHandler) SendTargetedEmailBatch(c *gin.Context) {
+	var req TargetedEmailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if err := validateTargetedEmailRequest(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	result := TargetedEmailResult{}
+	for _, recipient := range req.Recipients {
+		if err := h.emailService.SendEmail(c.Request.Context(), recipient, req.Subject, req.HTML); err != nil {
+			result.Failed++
+			if len(result.Errors) < 20 {
+				result.Errors = append(result.Errors, recipient+": "+err.Error())
+			}
+			continue
+		}
+		result.Sent++
+	}
+	response.Success(c, result)
+}
+
+func validateTargetedEmailRequest(req *TargetedEmailRequest) error {
+	req.Subject = strings.TrimSpace(req.Subject)
+	req.HTML = strings.TrimSpace(req.HTML)
+	if req.Subject == "" || req.HTML == "" {
+		return service.ErrEmailNotConfigured
+	}
+	seen := make(map[string]struct{}, len(req.Recipients))
+	recipients := make([]string, 0, len(req.Recipients))
+	for _, raw := range req.Recipients {
+		recipient := strings.TrimSpace(strings.ToLower(raw))
+		parsed, err := mail.ParseAddress(recipient)
+		if err != nil || parsed.Address != recipient {
+			return service.ErrInvalidVerifyCode
+		}
+		if _, ok := seen[recipient]; ok {
+			continue
+		}
+		seen[recipient] = struct{}{}
+		recipients = append(recipients, recipient)
+	}
+	if len(recipients) == 0 || len(recipients) > maxTargetedEmailRecipients {
+		return service.ErrInvalidVerifyCode
+	}
+	req.Recipients = recipients
+	return nil
 }
 
 // ListEmailTemplates returns all editable notification email templates.

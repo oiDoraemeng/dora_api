@@ -996,6 +996,38 @@ export async function sendTestEmail(
   return data;
 }
 
+export interface TargetedEmailRequest {
+  recipients: string[];
+  subject: string;
+  html: string;
+}
+
+export interface TargetedEmailResult {
+  sent: number;
+  failed: number;
+  errors?: string[];
+}
+
+export async function sendTargetedEmailTest(
+  request: TargetedEmailRequest,
+): Promise<TargetedEmailResult> {
+  const { data } = await apiClient.post<TargetedEmailResult>(
+    "/admin/settings/targeted-email/test",
+    request,
+  );
+  return data;
+}
+
+export async function sendTargetedEmailBatch(
+  request: TargetedEmailRequest,
+): Promise<TargetedEmailResult> {
+  const { data } = await apiClient.post<TargetedEmailResult>(
+    "/admin/settings/targeted-email/batch",
+    request,
+  );
+  return data;
+}
+
 // ==================== Email Template Settings ====================
 
 export interface EmailTemplateOption {
@@ -1404,6 +1436,8 @@ export const settingsAPI = {
   updateSettings,
   testSmtpConnection,
   sendTestEmail,
+  sendTargetedEmailTest,
+  sendTargetedEmailBatch,
   getEmailTemplates,
   getEmailTemplate,
   updateEmailTemplate,

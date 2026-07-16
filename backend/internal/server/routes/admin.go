@@ -464,6 +464,8 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		adminSettings.PUT("", h.Admin.Setting.UpdateSettings)
 		adminSettings.POST("/test-smtp", h.Admin.Setting.TestSMTPConnection)
 		adminSettings.POST("/send-test-email", h.Admin.Setting.SendTestEmail)
+		adminSettings.POST("/targeted-email/test", h.Admin.Setting.SendTargetedEmailTest)
+		adminSettings.POST("/targeted-email/batch", h.Admin.Setting.SendTargetedEmailBatch)
 		adminSettings.GET("/email-templates", h.Admin.Setting.ListEmailTemplates)
 		adminSettings.POST("/email-template-preview", h.Admin.Setting.PreviewEmailTemplate)
 		adminSettings.GET("/email-templates/:event/:locale", h.Admin.Setting.GetEmailTemplate)
