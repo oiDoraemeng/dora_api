@@ -322,10 +322,19 @@ func filterVerifiedEmails(entries []NotifyEmailEntry) []string {
 	return recipients
 }
 
-// collectBalanceNotifyRecipients returns verified, non-disabled email recipients.
-// Only emails with verified=true and disabled=false are included.
+// collectBalanceNotifyRecipients always includes the account's primary email,
+// then adds verified, non-disabled notification addresses. This guarantees an
+// enabled balance reminder has at least one default recipient.
 func (s *BalanceNotifyService) collectBalanceNotifyRecipients(user *User) []string {
-	return filterVerifiedEmails(user.BalanceNotifyExtraEmails)
+	if user == nil {
+		return nil
+	}
+	entries := make([]NotifyEmailEntry, 0, len(user.BalanceNotifyExtraEmails)+1)
+	if primaryEmail := strings.TrimSpace(user.Email); primaryEmail != "" {
+		entries = append(entries, NotifyEmailEntry{Email: primaryEmail, Verified: true})
+	}
+	entries = append(entries, user.BalanceNotifyExtraEmails...)
+	return filterVerifiedEmails(entries)
 }
 
 // sendEmails sends an email to all recipients with shared timeout and error logging.

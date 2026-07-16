@@ -10,7 +10,10 @@
           </svg>
         </div>
         <div>
-          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.balance') }}</p>
+          <div class="flex items-center gap-1">
+            <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.balance') }}</p>
+            <BalanceNotifyPopover v-if="balanceLowNotifyEnabled" :system-default-threshold="systemDefaultThreshold ?? 0" />
+          </div>
           <p class="text-xl font-bold text-emerald-600 dark:text-emerald-400">${{ formatBalance(balance) }}</p>
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('common.available') }}</p>
         </div>
@@ -226,6 +229,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
+import BalanceNotifyPopover from '@/components/user/dashboard/BalanceNotifyPopover.vue'
 import type { UserDashboardStats as UserStatsType } from '@/api/usage'
 import type { PlatformQuotaItem } from '@/types'
 
@@ -244,6 +248,8 @@ const props = defineProps<{
   balance: number
   isSimple: boolean
   platformQuotas?: PlatformQuotaItem[] | null
+  balanceLowNotifyEnabled?: boolean
+  systemDefaultThreshold?: number
 }>()
 const { t } = useI18n()
 

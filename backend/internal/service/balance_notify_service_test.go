@@ -226,6 +226,20 @@ func TestCollectBalanceNotifyRecipients_Empty(t *testing.T) {
 	require.Empty(t, s.collectBalanceNotifyRecipients(u))
 }
 
+func TestCollectBalanceNotifyRecipients_IncludesPrimaryEmailAndDeduplicatesIt(t *testing.T) {
+	s := &BalanceNotifyService{}
+	u := &User{
+		Email: "primary@example.com",
+		BalanceNotifyExtraEmails: []NotifyEmailEntry{
+			{Email: "PRIMARY@example.com", Verified: true},
+			{Email: "secondary@example.com", Verified: true},
+		},
+	}
+
+	got := s.collectBalanceNotifyRecipients(u)
+	require.Equal(t, []string{"primary@example.com", "secondary@example.com"}, got)
+}
+
 func TestCollectBalanceNotifyRecipients_FiltersDisabledAndUnverified(t *testing.T) {
 	s := &BalanceNotifyService{}
 	u := &User{
