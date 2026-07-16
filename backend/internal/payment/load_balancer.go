@@ -18,8 +18,9 @@ import (
 type Strategy string
 
 const (
-	StrategyRoundRobin  Strategy = "round-robin"
-	StrategyLeastAmount Strategy = "least-amount"
+	StrategyRoundRobin       Strategy = "round-robin"
+	StrategyLeastAmount      Strategy = "least-amount"
+	StrategyPriorityFailover Strategy = "priority-failover"
 )
 
 // ChannelLimits holds limits for a single payment channel within a provider instance.
@@ -36,6 +37,14 @@ type InstanceLimits map[string]ChannelLimits
 type LoadBalancer interface {
 	GetInstanceConfig(ctx context.Context, instanceID int64) (map[string]string, error)
 	SelectInstance(ctx context.Context, providerKey string, paymentType PaymentType, strategy Strategy, orderAmount float64) (*InstanceSelection, error)
+}
+
+// CandidateLoadBalancer is implemented by load balancers that can return all
+// eligible provider instances in priority order. It stays separate from
+// LoadBalancer so existing single-selection callers and test doubles remain
+// compatible.
+type CandidateLoadBalancer interface {
+	SelectCandidates(ctx context.Context, providerKey string, paymentType PaymentType, orderAmount float64) ([]*InstanceSelection, error)
 }
 
 // DefaultLoadBalancer implements LoadBalancer using database queries.
@@ -112,6 +121,36 @@ func (lb *DefaultLoadBalancer) SelectInstance(
 	// Step 4: pick by strategy.
 	selected := lb.pickByStrategy(available, strategy)
 	return lb.buildSelection(selected.inst)
+}
+
+// SelectCandidates returns every enabled, limit-eligible instance in stored
+// sort order. The EasyPay primary/backup flow uses the first candidate as the
+// primary and later candidates as backups.
+func (lb *DefaultLoadBalancer) SelectCandidates(
+	ctx context.Context,
+	providerKey string,
+	paymentType PaymentType,
+	orderAmount float64,
+) ([]*InstanceSelection, error) {
+	instances, err := lb.queryEnabledInstances(ctx, providerKey, paymentType)
+	if err != nil {
+		return nil, err
+	}
+
+	available := filterByLimits(lb.attachDailyUsage(ctx, instances), paymentType, orderAmount)
+	if len(available) == 0 {
+		return nil, fmt.Errorf("no eligible instance for payment type %s", paymentType)
+	}
+
+	selections := make([]*InstanceSelection, 0, len(available))
+	for _, candidate := range available {
+		selection, err := lb.buildSelection(candidate.inst)
+		if err != nil {
+			return nil, err
+		}
+		selections = append(selections, selection)
+	}
+	return selections, nil
 }
 
 // queryEnabledInstances returns enabled instances that support paymentType.

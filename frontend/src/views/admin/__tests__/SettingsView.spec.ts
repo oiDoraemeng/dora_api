@@ -826,6 +826,158 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(getProviders).toHaveBeenCalledTimes(2);
   });
 
+  it("submits the EasyPay primary/backup failover strategy", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      payment_load_balance_strategy: "priority-failover",
+    });
+
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payment_load_balance_strategy: "priority-failover",
+      }),
+    );
+  });
+
+  it("enables primary/backup failover when a second QR-code EasyPay instance is enabled", async () => {
+    const primary = {
+      id: 1,
+      provider_key: "easypay",
+      name: "Primary EasyPay",
+      config: {},
+      supported_types: ["alipay"],
+      enabled: true,
+      payment_mode: "qrcode",
+      refund_enabled: false,
+      allow_user_refund: false,
+      limits: "",
+      sort_order: 0,
+    };
+    const backup = {
+      ...primary,
+      id: 2,
+      name: "Backup EasyPay",
+      enabled: false,
+      sort_order: 1,
+    };
+    getProviders
+      .mockResolvedValueOnce({ data: [primary, backup] })
+      .mockResolvedValueOnce({ data: [primary, { ...backup, enabled: true }] });
+    updateProvider.mockResolvedValue({ data: { ...backup, enabled: true } });
+
+    const PaymentProviderListStub = defineComponent({
+      props: { providers: { type: Array, default: () => [] } },
+      emits: ["toggleField"],
+      setup(props, { emit }) {
+        return () => h("button", {
+          class: "enable-easypay-backup",
+          onClick: () => emit("toggleField", props.providers[1], "enabled"),
+        });
+      },
+    });
+    const wrapper = mount(SettingsView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          Select: SelectStub,
+          Toggle: ToggleStub,
+          Icon: true,
+          ConfirmDialog: true,
+          PaymentProviderList: PaymentProviderListStub,
+          PaymentProviderDialog: true,
+          GroupBadge: true,
+          GroupOptionItem: true,
+          ProxySelector: true,
+          ImageUpload: ImageUploadStub,
+          BackupSettings: true,
+        },
+      },
+    });
+
+    await flushPromises();
+    await openPaymentTab(wrapper);
+    await wrapper.get(".enable-easypay-backup").trigger("click");
+    await flushPromises();
+
+    expect(updateProvider).toHaveBeenCalledWith(2, { enabled: true });
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payment_load_balance_strategy: "priority-failover",
+      }),
+    );
+  });
+
+  it("rejects popup EasyPay instances in failover mode", async () => {
+    const primary = {
+      id: 1,
+      provider_key: "easypay",
+      name: "Primary EasyPay",
+      config: {},
+      supported_types: ["alipay"],
+      enabled: true,
+      payment_mode: "qrcode",
+      refund_enabled: false,
+      allow_user_refund: false,
+      limits: "",
+      sort_order: 0,
+    };
+    const popupBackup = {
+      ...primary,
+      id: 2,
+      name: "Popup EasyPay",
+      enabled: false,
+      payment_mode: "popup",
+      sort_order: 1,
+    };
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      payment_load_balance_strategy: "priority-failover",
+    });
+    getProviders.mockResolvedValue({ data: [primary, popupBackup] });
+
+    const PaymentProviderListStub = defineComponent({
+      props: { providers: { type: Array, default: () => [] } },
+      emits: ["toggleField"],
+      setup(props, { emit }) {
+        return () => h("button", {
+          class: "enable-popup-easypay-backup",
+          onClick: () => emit("toggleField", props.providers[1], "enabled"),
+        });
+      },
+    });
+    const wrapper = mount(SettingsView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          Select: SelectStub,
+          Toggle: ToggleStub,
+          Icon: true,
+          ConfirmDialog: true,
+          PaymentProviderList: PaymentProviderListStub,
+          PaymentProviderDialog: true,
+          GroupBadge: true,
+          GroupOptionItem: true,
+          ProxySelector: true,
+          ImageUpload: ImageUploadStub,
+          BackupSettings: true,
+        },
+      },
+    });
+
+    await flushPromises();
+    await openPaymentTab(wrapper);
+    await wrapper.get(".enable-popup-easypay-backup").trigger("click");
+    await flushPromises();
+
+    expect(showError).toHaveBeenCalled();
+    expect(updateProvider).not.toHaveBeenCalled();
+  });
+
   it("renders advanced scheduler copy as local experimental gateway policy", async () => {
     const wrapper = mountView();
 

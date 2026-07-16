@@ -58,6 +58,12 @@
             </svg>
           </div>
           <div class="min-w-0 flex-1">
+            <p
+              v-if="getFailoverPriority(p)"
+              class="mb-1 text-xs font-medium text-amber-700 dark:text-amber-300"
+            >
+              {{ t('admin.settings.payment.failoverPriority', { priority: getFailoverPriority(p) }) }}
+            </p>
             <ProviderCard
               :provider="p"
               :enabled="isEnabled(p.provider_key)"
@@ -108,6 +114,7 @@ const props = defineProps<{
   enabledPaymentTypes: string[]
   allPaymentTypes: TypeOption[]
   redirectLabel: string
+  failoverActive: boolean
 }>()
 
 const emit = defineEmits<{
@@ -146,5 +153,16 @@ function getTypes(providerKey: string): TypeOption[] {
       ? { ...opt, label: t(`payment.methods.${opt.value}`, opt.value) }
       : opt,
     )
+}
+
+function getFailoverPriority(provider: ProviderInstance): number | null {
+  if (!props.failoverActive || !provider.enabled || provider.provider_key !== 'easypay') {
+    return null
+  }
+  const easyPayProviders = localProviders.value.filter(
+    (item) => item.enabled && item.provider_key === 'easypay',
+  )
+  const index = easyPayProviders.findIndex((item) => item.id === provider.id)
+  return index >= 0 ? index + 1 : null
 }
 </script>

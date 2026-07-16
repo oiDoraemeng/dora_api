@@ -4,6 +4,33 @@ package payment
 
 import "context"
 
+// ProviderConfigurationError means a provider could not be constructed before
+// any upstream request was made. Callers may safely try another provider.
+type ProviderConfigurationError struct {
+	Message string
+}
+
+func (e *ProviderConfigurationError) Error() string {
+	if e == nil {
+		return "provider configuration error"
+	}
+	return e.Message
+}
+
+// CreatePaymentRejectedError is returned when a provider explicitly rejects a
+// create-payment request. The caller can safely fall back because the provider
+// has confirmed that it did not create a payable order.
+type CreatePaymentRejectedError struct {
+	Message string
+}
+
+func (e *CreatePaymentRejectedError) Error() string {
+	if e == nil {
+		return "payment creation rejected"
+	}
+	return e.Message
+}
+
 // PaymentType represents a supported payment method.
 type PaymentType = string
 

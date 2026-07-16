@@ -50,7 +50,9 @@ type easyPayCustomMethod struct {
 func NewEasyPay(instanceID string, config map[string]string) (*EasyPay, error) {
 	for _, k := range []string{"pid", "pkey", "apiBase", "notifyUrl", "returnUrl"} {
 		if strings.TrimSpace(config[k]) == "" {
-			return nil, fmt.Errorf("easypay config missing required key: %s", k)
+			return nil, &payment.ProviderConfigurationError{
+				Message: fmt.Sprintf("easypay config missing required key: %s", k),
+			}
 		}
 	}
 	cfg := make(map[string]string, len(config))
@@ -195,7 +197,9 @@ func (e *EasyPay) createAPIPayment(ctx context.Context, req payment.CreatePaymen
 		return nil, fmt.Errorf("easypay parse: %w", err)
 	}
 	if resp.Code != easypayCodeSuccess {
-		return nil, fmt.Errorf("easypay error: %s", resp.Msg)
+		return nil, &payment.CreatePaymentRejectedError{
+			Message: fmt.Sprintf("easypay error: %s", resp.Msg),
+		}
 	}
 	payURL := resp.PayURL
 	if req.IsMobile && resp.PayURL2 != "" {

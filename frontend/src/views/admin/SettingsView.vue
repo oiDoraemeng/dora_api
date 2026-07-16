@@ -6654,6 +6654,12 @@
                       :options="loadBalanceOptions"
                       class="w-40"
                     />
+                    <p
+                      v-if="form.payment_load_balance_strategy === 'priority-failover'"
+                      class="mt-1 text-xs text-amber-700 dark:text-amber-300"
+                    >
+                      {{ t("admin.settings.payment.strategyPriorityFailoverHint") }}
+                    </p>
                   </div>
                   <div>
                     <label class="input-label">{{
@@ -6866,6 +6872,7 @@
             :enabled-payment-types="form.payment_enabled_types"
             :all-payment-types="allPaymentTypes"
             :redirect-label="t('admin.settings.payment.easypayRedirect')"
+            :failover-active="form.payment_load_balance_strategy === 'priority-failover'"
             @refresh="loadProviders"
             @create="openCreateProvider"
             @edit="openEditProvider"
@@ -9611,6 +9618,7 @@ async function saveSettings() {
       return;
     }
     // Validate URL fields — novalidate disables browser-native checks, so we validate here
+    if (showEasyPayFailoverPopupConflict()) return;
     const isValidHttpUrl = (url: string): boolean => {
       if (!url) return true;
       try {
@@ -10549,6 +10557,10 @@ const loadBalanceOptions = computed(() => [
     value: "least-amount",
     label: t("admin.settings.payment.strategyLeastAmount"),
   },
+  {
+    value: "priority-failover",
+    label: t("admin.settings.payment.strategyPriorityFailover"),
+  },
 ]);
 
 const cancelRateLimitUnitOptions = computed(() => [
@@ -10573,7 +10585,12 @@ const cancelRateLimitModeOptions = computed(() => [
 
 type ProviderEnablementCandidate = Pick<
   ProviderInstance,
-  "id" | "provider_key" | "supported_types" | "enabled" | "name"
+  | "id"
+  | "provider_key"
+  | "supported_types"
+  | "enabled"
+  | "name"
+  | "payment_mode"
 >;
 
 function getProviderVisibleMethods(
@@ -10615,7 +10632,12 @@ function getProviderVisibleMethods(
       });
     }
   } else if (provider.provider_key === "easypay") {
-    supportedTypes.forEach(addMethod);
+    if (supportedTypes.length === 0) {
+      methods.add("alipay");
+      methods.add("wxpay");
+    } else {
+      supportedTypes.forEach(addMethod);
+    }
   }
 
   return Array.from(methods);
@@ -10639,6 +10661,9 @@ function findProviderEnablementConflict(
       otherMethods.includes(method),
     );
     if (matchedMethod) {
+      if (candidate.provider_key === "easypay" && other.provider_key === "easypay") {
+        continue;
+      }
       return {
         method: matchedMethod,
         conflicting: other,
@@ -10647,6 +10672,91 @@ function findProviderEnablementConflict(
   }
 
   return null;
+}
+
+function enableEasyPayFailoverWhenNeeded(
+  candidate: ProviderEnablementCandidate,
+): boolean {
+  if (!candidate.enabled || candidate.provider_key !== "easypay") {
+    return false;
+  }
+
+  const candidateMethods = getProviderVisibleMethods(candidate);
+  const hasEasyPayOverlap = providers.value.some((other) => {
+    if (
+      other.id === candidate.id ||
+      !other.enabled ||
+      other.provider_key !== "easypay"
+    ) {
+      return false;
+    }
+    return getProviderVisibleMethods(other).some((method) =>
+      candidateMethods.includes(method),
+    );
+  });
+  if (!hasEasyPayOverlap) {
+    return false;
+  }
+
+  const changed = form.payment_load_balance_strategy !== "priority-failover";
+  form.payment_load_balance_strategy = "priority-failover";
+  return changed;
+}
+
+function findEasyPayFailoverPopupConflict(
+  candidate?: ProviderEnablementCandidate,
+): { method: "alipay" | "wxpay"; provider: ProviderEnablementCandidate } | null {
+  if (form.payment_load_balance_strategy !== "priority-failover") {
+    return null;
+  }
+
+  const candidateProviders: ProviderEnablementCandidate[] = providers.value.map(
+    (provider) => ({
+      id: provider.id,
+      provider_key: provider.provider_key,
+      supported_types: provider.supported_types,
+      enabled: provider.enabled,
+      name: provider.name,
+      payment_mode: provider.payment_mode,
+    }),
+  );
+  if (candidate) {
+    const index = candidateProviders.findIndex(
+      (provider) => provider.id === candidate.id,
+    );
+    if (index >= 0) candidateProviders[index] = candidate;
+    else candidateProviders.push(candidate);
+  }
+
+  for (const method of ["alipay", "wxpay"] as const) {
+    const matching = candidateProviders.filter(
+      (provider) =>
+        provider.enabled &&
+        provider.provider_key === "easypay" &&
+        getProviderVisibleMethods(provider).includes(method),
+    );
+    const popupProvider = matching.find(
+      (provider) => provider.payment_mode === "popup",
+    );
+    if (matching.length > 1 && popupProvider) {
+      return { method, provider: popupProvider };
+    }
+  }
+  return null;
+}
+
+function showEasyPayFailoverPopupConflict(
+  candidate?: ProviderEnablementCandidate,
+): boolean {
+  const conflict = findEasyPayFailoverPopupConflict(candidate);
+  if (!conflict) return false;
+  appStore.showError(
+    t("admin.settings.payment.failoverPopupConflict", {
+      method: t(`payment.methods.${conflict.method}`),
+      provider: conflict.provider.name,
+    }),
+  );
+  return true;
 }
 
 function showProviderEnablementConflict(
@@ -10705,12 +10815,16 @@ async function handleSaveProvider(payload: Partial<ProviderInstance>) {
         payload.supported_types ?? editingProvider.value?.supported_types ?? [],
       enabled: payload.enabled ?? editingProvider.value?.enabled ?? false,
       name: payload.name ?? editingProvider.value?.name ?? "",
+      payment_mode:
+        payload.payment_mode ?? editingProvider.value?.payment_mode ?? "",
     };
+    enableEasyPayFailoverWhenNeeded(candidate);
     const conflict = findProviderEnablementConflict(candidate);
     if (conflict) {
       showProviderEnablementConflict(conflict);
       return;
     }
+    if (showEasyPayFailoverPopupConflict(candidate)) return;
 
     if (editingProvider.value) {
       await adminAPI.payment.updateProvider(editingProvider.value.id, payload);
@@ -10739,17 +10853,31 @@ async function handleToggleField(
   else newValue = !provider.allow_user_refund;
 
   if (field === "enabled" && newValue) {
-    const conflict = findProviderEnablementConflict({
+    const candidate: ProviderEnablementCandidate = {
       id: provider.id,
       provider_key: provider.provider_key,
       supported_types: provider.supported_types,
       enabled: true,
       name: provider.name,
-    });
+      payment_mode: provider.payment_mode,
+    };
+    const enabledFailover = enableEasyPayFailoverWhenNeeded(candidate);
+    const conflict = findProviderEnablementConflict(candidate);
     if (conflict) {
       showProviderEnablementConflict(conflict);
       return;
     }
+    if (showEasyPayFailoverPopupConflict(candidate)) return;
+
+    const payload: Record<string, boolean> = { [field]: newValue };
+    try {
+      await adminAPI.payment.updateProvider(provider.id, payload);
+      await loadProviders();
+      if (enabledFailover) await saveSettings();
+    } catch (err: unknown) {
+      appStore.showError(extractI18nErrorMessage(err, t, "payment.errors", t("common.error")));
+    }
+    return;
   }
 
   const payload: Record<string, boolean> = { [field]: newValue };
@@ -10772,22 +10900,27 @@ async function handleToggleType(provider: ProviderInstance, type: string) {
   const updated = currentTypes.includes(type)
     ? currentTypes.filter((t) => t !== type)
     : [...currentTypes, type];
-  const conflict = findProviderEnablementConflict({
+  const candidate: ProviderEnablementCandidate = {
     id: provider.id,
     provider_key: provider.provider_key,
     supported_types: updated,
     enabled: provider.enabled,
     name: provider.name,
-  });
+    payment_mode: provider.payment_mode,
+  };
+  const enabledFailover = enableEasyPayFailoverWhenNeeded(candidate);
+  const conflict = findProviderEnablementConflict(candidate);
   if (conflict) {
     showProviderEnablementConflict(conflict);
     return;
   }
+  if (showEasyPayFailoverPopupConflict(candidate)) return;
   try {
     await adminAPI.payment.updateProvider(provider.id, {
       supported_types: updated,
     } as any);
     await loadProviders();
+    if (enabledFailover) await saveSettings();
   } catch (err: unknown) {
     appStore.showError(extractI18nErrorMessage(err, t, "payment.errors", t("common.error")));
   }

@@ -80,6 +80,11 @@ The current payment UX keeps the frontend method list unified and does not expos
 |----------|-------------|
 | **Round Robin** | Distribute orders to instances in rotation |
 | **Least Amount** | Prefer instances with the lowest daily cumulative amount |
+| **EasyPay Primary/Backup Failover (`priority-failover`)** | Applies only to Alipay and WeChat Pay methods routed to EasyPay; uses provider list order and tries backups only after a confirmed creation failure |
+
+With primary/backup failover, multiple EasyPay instances may support the same visible method. Drag the provider list to set priority: the first eligible instance is primary and later instances are backups. Instances that cannot satisfy their per-order or daily limits are skipped.
+
+To avoid duplicate charges, automatic fallback occurs only after a local configuration error, DNS/TLS/connection-refused error, or an explicit EasyPay rejection. Timeouts, interrupted connections, and malformed responses are treated as ambiguous and returned without retrying another provider. Every participating EasyPay instance must use QR code mode; `popup` mode does not create an order server-side and cannot fail over reliably.
 
 ### Cancel Rate Limiting
 

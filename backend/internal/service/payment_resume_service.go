@@ -210,6 +210,30 @@ func (lb *visibleMethodLoadBalancer) SelectInstance(ctx context.Context, provide
 	return lb.inner.SelectInstance(ctx, inst.ProviderKey, paymentType, strategy, orderAmount)
 }
 
+// SelectCandidates applies the visible-method source route before returning
+// every limit-eligible provider in stored sort order. PaymentService uses this
+// optional capability only for the EasyPay primary/backup strategy.
+func (lb *visibleMethodLoadBalancer) SelectCandidates(ctx context.Context, providerKey string, paymentType payment.PaymentType, orderAmount float64) ([]*payment.InstanceSelection, error) {
+	candidateSelector, ok := lb.inner.(payment.CandidateLoadBalancer)
+	if !ok {
+		return nil, fmt.Errorf("payment load balancer does not support candidate selection")
+	}
+
+	visibleMethod := NormalizeVisibleMethod(paymentType)
+	if providerKey != "" || (visibleMethod != payment.TypeAlipay && visibleMethod != payment.TypeWxpay) {
+		return candidateSelector.SelectCandidates(ctx, providerKey, paymentType, orderAmount)
+	}
+
+	inst, err := lb.configService.resolveEnabledVisibleMethodInstance(ctx, visibleMethod)
+	if err != nil {
+		return nil, err
+	}
+	if inst == nil {
+		return nil, fmt.Errorf("visible payment method %s has no enabled provider instance", visibleMethod)
+	}
+	return candidateSelector.SelectCandidates(ctx, inst.ProviderKey, paymentType, orderAmount)
+}
+
 func visibleMethodEnabledSettingKey(method string) string {
 	switch NormalizeVisibleMethod(method) {
 	case payment.TypeAlipay:

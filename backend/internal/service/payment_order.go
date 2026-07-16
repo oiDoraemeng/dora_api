@@ -73,11 +73,15 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if err != nil {
 		return nil, err
 	}
-	sel, err := s.selectCreateOrderInstance(ctx, req, cfg, payAmount)
+	selections, err := s.selectCreateOrderInstances(ctx, req, cfg, payAmount)
 	if err != nil {
 		return nil, err
 	}
+	sel := selections[0]
 	if err := s.validateSelectedCreateOrderInstance(ctx, req, sel); err != nil {
+		return nil, err
+	}
+	if err := validateEasyPayFailoverSelections(selections); err != nil {
 		return nil, err
 	}
 	selectedCurrency := payment.DefaultPaymentCurrency
@@ -104,7 +108,7 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if err != nil {
 		return nil, err
 	}
-	resp, err := s.invokeProvider(ctx, order, req, cfg, limitAmount, payAmountStr, payAmount, plan, sel)
+	resp, err := s.invokeProviderCandidates(ctx, order, req, cfg, limitAmount, payAmountStr, payAmount, plan, selections)
 	if err != nil {
 		_, _ = s.entClient.PaymentOrder.UpdateOneID(order.ID).
 			SetStatus(OrderStatusFailed).
@@ -346,12 +350,25 @@ func (s *PaymentService) checkDailyLimit(ctx context.Context, tx *dbent.Tx, user
 	return nil
 }
 
-func (s *PaymentService) selectCreateOrderInstance(ctx context.Context, req CreateOrderRequest, cfg *PaymentConfig, payAmount float64) (*payment.InstanceSelection, error) {
+func (s *PaymentService) selectCreateOrderInstances(ctx context.Context, req CreateOrderRequest, cfg *PaymentConfig, payAmount float64) ([]*payment.InstanceSelection, error) {
 	selectCtx, err := s.prepareCreateOrderSelectionContext(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	sel, err := s.loadBalancer.SelectInstance(selectCtx, "", req.PaymentType, payment.Strategy(cfg.LoadBalanceStrategy), payAmount)
+	strategy := payment.Strategy(cfg.LoadBalanceStrategy)
+	if strategy == payment.StrategyPriorityFailover && isEasyPayFailoverVisibleMethod(req.PaymentType) {
+		if candidateSelector, ok := s.loadBalancer.(payment.CandidateLoadBalancer); ok {
+			selections, candidateErr := candidateSelector.SelectCandidates(selectCtx, "", req.PaymentType, payAmount)
+			if candidateErr == nil && allEasyPaySelections(selections) {
+				return selections, nil
+			}
+			if candidateErr != nil {
+				return nil, infraerrors.ServiceUnavailable("PAYMENT_GATEWAY_ERROR", "method_not_configured").
+					WithMetadata(map[string]string{"payment_type": req.PaymentType})
+			}
+		}
+	}
+	sel, err := s.loadBalancer.SelectInstance(selectCtx, "", req.PaymentType, strategy, payAmount)
 	if err != nil {
 		return nil, infraerrors.ServiceUnavailable("PAYMENT_GATEWAY_ERROR", "method_not_configured").
 			WithMetadata(map[string]string{"payment_type": req.PaymentType})
@@ -359,7 +376,43 @@ func (s *PaymentService) selectCreateOrderInstance(ctx context.Context, req Crea
 	if sel == nil {
 		return nil, infraerrors.TooManyRequests("NO_AVAILABLE_INSTANCE", "no_available_instance")
 	}
-	return sel, nil
+	return []*payment.InstanceSelection{sel}, nil
+}
+
+func isEasyPayFailoverVisibleMethod(paymentType string) bool {
+	switch NormalizeVisibleMethod(paymentType) {
+	case payment.TypeAlipay, payment.TypeWxpay:
+		return true
+	default:
+		return false
+	}
+}
+
+func allEasyPaySelections(selections []*payment.InstanceSelection) bool {
+	if len(selections) == 0 {
+		return false
+	}
+	for _, selection := range selections {
+		if selection == nil || selection.ProviderKey != payment.TypeEasyPay {
+			return false
+		}
+	}
+	return true
+}
+
+func validateEasyPayFailoverSelections(selections []*payment.InstanceSelection) error {
+	if len(selections) < 2 || !allEasyPaySelections(selections) {
+		return nil
+	}
+	for _, selection := range selections {
+		if strings.EqualFold(strings.TrimSpace(selection.PaymentMode), "popup") {
+			return infraerrors.BadRequest(
+				"EASYPAY_FAILOVER_REQUIRES_API_MODE",
+				"EasyPay primary/backup instances must use QR code mode",
+			)
+		}
+	}
+	return nil
 }
 
 func (s *PaymentService) prepareCreateOrderSelectionContext(ctx context.Context, req CreateOrderRequest) (context.Context, error) {
@@ -397,7 +450,27 @@ func (s *PaymentService) usesOfficialWxpayVisibleMethod(ctx context.Context) boo
 	return inst.ProviderKey == payment.TypeWxpay
 }
 
-func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.PaymentOrder, req CreateOrderRequest, cfg *PaymentConfig, limitAmount float64, payAmountStr string, payAmount float64, plan *dbent.SubscriptionPlan, sel *payment.InstanceSelection) (*CreateOrderResponse, error) {
+func (s *PaymentService) invokeProviderCandidates(ctx context.Context, order *dbent.PaymentOrder, req CreateOrderRequest, cfg *PaymentConfig, limitAmount float64, payAmountStr string, payAmount float64, plan *dbent.SubscriptionPlan, selections []*payment.InstanceSelection) (*CreateOrderResponse, error) {
+	for _, selection := range selections {
+		resp, err, safeToFailover := s.invokeProvider(ctx, order, req, cfg, limitAmount, payAmountStr, payAmount, plan, selection)
+		if err == nil {
+			return resp, nil
+		}
+
+		s.writeAuditLog(ctx, order.ID, "ORDER_PROVIDER_FAILED", fmt.Sprintf("user:%d", req.UserID), map[string]any{
+			"provider":         selection.ProviderKey,
+			"providerInstance": selection.InstanceID,
+			"safeToFailover":   safeToFailover,
+		})
+		if !safeToFailover || len(selections) == 1 {
+			return nil, err
+		}
+	}
+
+	return nil, infraerrors.ServiceUnavailable("PAYMENT_GATEWAY_ERROR", "payment gateway error")
+}
+
+func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.PaymentOrder, req CreateOrderRequest, cfg *PaymentConfig, limitAmount float64, payAmountStr string, payAmount float64, plan *dbent.SubscriptionPlan, sel *payment.InstanceSelection) (*CreateOrderResponse, error, bool) {
 	prov, err := provider.CreateProvider(sel.ProviderKey, sel.InstanceID, sel.Config)
 	if err != nil {
 		slog.Error("[PaymentService] CreateProvider failed", "provider", sel.ProviderKey, "instance", sel.InstanceID, "error", err)
@@ -408,16 +481,16 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 			for k, v := range appErr.Metadata {
 				md[k] = v
 			}
-			return nil, appErr.WithMetadata(md)
+			return nil, appErr.WithMetadata(md), isSafeEasyPayFailoverError(sel.ProviderKey, err)
 		}
 		return nil, infraerrors.ServiceUnavailable("PAYMENT_PROVIDER_MISCONFIGURED", "provider_misconfigured").
-			WithMetadata(map[string]string{"provider": sel.ProviderKey, "instance_id": sel.InstanceID})
+			WithMetadata(map[string]string{"provider": sel.ProviderKey, "instance_id": sel.InstanceID}), isSafeEasyPayFailoverError(sel.ProviderKey, err)
 	}
 	subject := s.buildPaymentSubject(plan, limitAmount, cfg, sel)
 	outTradeNo := order.OutTradeNo
 	canonicalReturnURL, err := CanonicalizeReturnURL(req.ReturnURL, req.SrcHost, req.SrcURL)
 	if err != nil {
-		return nil, err
+		return nil, err, false
 	}
 	resumeToken := ""
 	if resume := s.paymentResume(); resume != nil {
@@ -431,13 +504,13 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 				CanonicalReturnURL: canonicalReturnURL,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("create payment resume token: %w", err)
+				return nil, fmt.Errorf("create payment resume token: %w", err), false
 			}
 		}
 	}
 	providerReturnURL, err := buildPaymentReturnURL(canonicalReturnURL, order.ID, outTradeNo, resumeToken)
 	if err != nil {
-		return nil, err
+		return nil, err, false
 	}
 	providerReq := buildProviderCreatePaymentRequest(CreateOrderRequest{
 		PaymentType: req.PaymentType,
@@ -452,20 +525,23 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 	if err != nil {
 		slog.Error("[PaymentService] CreatePayment failed", "provider", sel.ProviderKey, "instance", sel.InstanceID, "error", err)
 		if appErr := new(infraerrors.ApplicationError); errors.As(err, &appErr) {
-			return nil, appErr
+			return nil, appErr, isSafeEasyPayFailoverError(sel.ProviderKey, err)
 		}
-		return nil, classifyCreatePaymentError(req, sel.ProviderKey, err)
+		return nil, classifyCreatePaymentError(req, sel.ProviderKey, err), isSafeEasyPayFailoverError(sel.ProviderKey, err)
 	}
 	sanitizeCreatePaymentResponseDetails(pr)
-	_, err = s.entClient.PaymentOrder.UpdateOneID(order.ID).
+	orderUpdate := s.entClient.PaymentOrder.UpdateOneID(order.ID).
 		SetNillablePaymentTradeNo(psNilIfEmpty(pr.TradeNo)).
 		SetNillablePayURL(psNilIfEmpty(pr.PayURL)).
 		SetNillableQrCode(psNilIfEmpty(pr.QRCode)).
 		SetNillableProviderInstanceID(psNilIfEmpty(sel.InstanceID)).
-		SetNillableProviderKey(psNilIfEmpty(sel.ProviderKey)).
-		Save(ctx)
+		SetNillableProviderKey(psNilIfEmpty(sel.ProviderKey))
+	if providerSnapshot := buildPaymentOrderProviderSnapshot(sel, req); providerSnapshot != nil {
+		orderUpdate.SetProviderSnapshot(providerSnapshot)
+	}
+	_, err = orderUpdate.Save(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("update order with payment details: %w", err)
+		return nil, fmt.Errorf("update order with payment details: %w", err), false
 	}
 	s.writeAuditLog(ctx, order.ID, "ORDER_CREATED", fmt.Sprintf("user:%d", req.UserID), map[string]any{
 		"paymentAmount":  req.Amount,
@@ -481,7 +557,7 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 	}
 	resp := buildCreateOrderResponse(order, req, payAmount, sel, pr, resultType)
 	resp.ResumeToken = resumeToken
-	return resp, nil
+	return resp, nil, false
 }
 
 func sanitizeCreatePaymentResponseDetails(pr *payment.CreatePaymentResponse) {
