@@ -108,7 +108,10 @@ async function selectButtonByText(wrapper: ReturnType<typeof mountModal>, text: 
   await button?.trigger('click')
 }
 
-async function submitApiKeyAccount(platform: 'openai' | 'anthropic', enableLongContextBilling = false) {
+async function submitApiKeyAccount(
+  platform: 'openai' | 'anthropic',
+  longContextBillingEnabled: boolean | null = null
+) {
   const wrapper = mountModal()
   await selectButtonByText(wrapper, platform === 'openai' ? 'OpenAI' : 'admin.accounts.claudeConsole')
   if (platform === 'openai') {
@@ -116,8 +119,12 @@ async function submitApiKeyAccount(platform: 'openai' | 'anthropic', enableLongC
   }
   await wrapper.get('form#create-account-form input[type="text"]').setValue(`${platform} account`)
   await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
-  if (enableLongContextBilling) {
-    await wrapper.get('[data-testid="openai-long-context-billing-toggle"]').trigger('click')
+  if (platform === 'openai' && longContextBillingEnabled !== null) {
+    const toggle = wrapper.get('[data-testid="openai-long-context-billing-toggle"]')
+    const current = toggle.attributes('aria-checked') === 'true'
+    if (current !== longContextBillingEnabled) {
+      await toggle.trigger('click')
+    }
   }
   await wrapper.get('form#create-account-form').trigger('submit.prevent')
   await flushPromises()
@@ -148,11 +155,11 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     createOpenAICodexPATMock.mockReset().mockResolvedValue({})
   })
 
-  it('sends false explicitly for normal OpenAI account creation by default', async () => {
+  it('sends true explicitly for normal OpenAI account creation by default', async () => {
     await submitApiKeyAccount('openai')
 
     expect(createAccountMock).toHaveBeenCalledTimes(1)
-    expect(createAccountMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBe(false)
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBe(true)
   })
 
   it('exposes Agent Identity in the OpenAI authorization methods', async () => {
@@ -215,32 +222,32 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(createOpenAICodexPATMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBeUndefined()
   })
 
-  it('sends explicit true for Codex session import after the toggle is enabled', async () => {
-    const wrapper = await openCodexImportStep(1)
+  it('sends explicit true for Codex session import after the toggle is turned back on', async () => {
+    const wrapper = await openCodexImportStep(2)
     await wrapper.get('[data-testid="import-codex-session"]').trigger('click')
     await flushPromises()
 
     expect(importCodexSessionMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBe(true)
   })
 
-  it('sends explicit false for Codex session import after the toggle is changed back', async () => {
-    const wrapper = await openCodexImportStep(2)
+  it('sends explicit false for Codex session import after the toggle is turned off', async () => {
+    const wrapper = await openCodexImportStep(1)
     await wrapper.get('[data-testid="import-codex-session"]').trigger('click')
     await flushPromises()
 
     expect(importCodexSessionMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBe(false)
   })
 
-  it('sends explicit true for Codex PAT import after the toggle is enabled', async () => {
-    const wrapper = await openCodexImportStep(1)
+  it('sends explicit true for Codex PAT import after the toggle is turned back on', async () => {
+    const wrapper = await openCodexImportStep(2)
     await wrapper.get('[data-testid="import-codex-pat"]').trigger('click')
     await flushPromises()
 
     expect(createOpenAICodexPATMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBe(true)
   })
 
-  it('sends explicit false for Codex PAT import after the toggle is changed back', async () => {
-    const wrapper = await openCodexImportStep(2)
+  it('sends explicit false for Codex PAT import after the toggle is turned off', async () => {
+    const wrapper = await openCodexImportStep(1)
     await wrapper.get('[data-testid="import-codex-pat"]').trigger('click')
     await flushPromises()
 

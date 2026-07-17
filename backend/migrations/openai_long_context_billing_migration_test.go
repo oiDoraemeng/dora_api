@@ -34,3 +34,14 @@ func TestMigration175GuardsMixedVersionAccountWrites(t *testing.T) {
 	require.Contains(t, sql, "TG_OP = 'UPDATE'")
 	require.Contains(t, sql, "OLD.extra->'openai_long_context_billing_enabled'")
 }
+
+func TestMigration182DefaultsOpenAILongContextBillingToEnabled(t *testing.T) {
+	content, err := FS.ReadFile("182_default_openai_long_context_billing_true.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "UPDATE accounts")
+	require.Contains(t, sql, "platform = 'openai'")
+	require.Contains(t, sql, "'true'::jsonb")
+	require.Contains(t, sql, "openai_long_context_billing_enabled")
+}

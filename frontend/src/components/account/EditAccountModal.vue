@@ -2805,7 +2805,7 @@ const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
-const openAILongContextBillingEnabled = ref(false)
+const openAILongContextBillingEnabled = ref(true)
 // OpenAI 订阅档位（Plus/Pro/Free）手动覆盖值,存于 credentials.plan_type;'' 表示清空/自动识别
 const editPlanType = ref<string>('')
 const openAICompactMode = ref<OpenAICompactMode>('auto')
@@ -3240,7 +3240,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   // Load OpenAI passthrough toggle (OpenAI OAuth/SetupToken/API Key)
   openaiPassthroughEnabled.value = false
-  openAILongContextBillingEnabled.value = false
+  openAILongContextBillingEnabled.value = true
   editPlanType.value = ''
   openAICompactMode.value = 'auto'
   openAIResponsesMode.value = 'auto'
@@ -3257,7 +3257,13 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
     const longContextBillingValue = extra?.openai_long_context_billing_enabled
-    openAILongContextBillingEnabled.value = longContextBillingValue === true
+    const hasLongContextBillingValue = Object.prototype.hasOwnProperty.call(
+      extra ?? {},
+      'openai_long_context_billing_enabled'
+    )
+    openAILongContextBillingEnabled.value = hasLongContextBillingValue
+      ? longContextBillingValue === true
+      : true
     // plan_type 手动覆盖仅 OAuth 有实际调度语义(IsOpenAIChatGPTSubscription 要求 oauth),故只对 oauth 回填
     editPlanType.value = newAccount.type === 'oauth'
       ? readPlanType(newAccount.credentials as Record<string, unknown> | undefined)

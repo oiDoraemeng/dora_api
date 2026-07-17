@@ -19,8 +19,8 @@ func TestAccountIsOpenAILongContextBillingEnabled(t *testing.T) {
 	}{
 		{name: "nil account is disabled", account: nil, want: false},
 		{name: "non OpenAI account is disabled", account: &Account{Platform: PlatformGrok}, want: false},
-		{name: "missing extra defaults disabled", account: &Account{Platform: PlatformOpenAI}, want: false},
-		{name: "missing key defaults disabled", account: &Account{Platform: PlatformOpenAI, Extra: map[string]any{}}, want: false},
+		{name: "missing extra defaults enabled", account: &Account{Platform: PlatformOpenAI}, want: true},
+		{name: "missing key defaults enabled", account: &Account{Platform: PlatformOpenAI, Extra: map[string]any{}}, want: true},
 		{name: "explicit true is enabled", account: &Account{Platform: PlatformOpenAI, Extra: map[string]any{"openai_long_context_billing_enabled": true}}, want: true},
 		{name: "explicit false is disabled", account: &Account{Platform: PlatformOpenAI, Extra: map[string]any{"openai_long_context_billing_enabled": false}}, want: false},
 		{name: "malformed value is disabled", account: &Account{Platform: PlatformOpenAI, Extra: map[string]any{"openai_long_context_billing_enabled": "false"}}, want: false},
@@ -34,11 +34,11 @@ func TestAccountIsOpenAILongContextBillingEnabled(t *testing.T) {
 }
 
 func TestNormalizeOpenAILongContextBillingExtra(t *testing.T) {
-	t.Run("OpenAI missing key persists disabled default", func(t *testing.T) {
+	t.Run("OpenAI missing key persists enabled default", func(t *testing.T) {
 		extra, err := normalizeOpenAILongContextBillingExtra(PlatformOpenAI, nil)
 
 		require.NoError(t, err)
-		require.Equal(t, false, extra["openai_long_context_billing_enabled"])
+		require.Equal(t, true, extra["openai_long_context_billing_enabled"])
 	})
 
 	t.Run("OpenAI explicit false is preserved", func(t *testing.T) {

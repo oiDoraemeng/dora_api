@@ -3759,7 +3759,7 @@ const applyGrokOAuthUpstreamConfig = (credentials: Record<string, unknown>) => {
 const interceptWarmupRequests = ref(false)
 const autoPauseOnExpired = ref(true)
 const openaiPassthroughEnabled = ref(false)
-const openAILongContextBillingEnabled = ref(false)
+const openAILongContextBillingEnabled = ref(true)
 const openAILongContextBillingTouched = ref(false)
 const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
@@ -4625,7 +4625,7 @@ const resetForm = () => {
   interceptWarmupRequests.value = false
   autoPauseOnExpired.value = true
   openaiPassthroughEnabled.value = false
-  openAILongContextBillingEnabled.value = false
+  openAILongContextBillingEnabled.value = true
   openAILongContextBillingTouched.value = false
   openAICompactMode.value = 'auto'
   openAIResponsesMode.value = 'auto'

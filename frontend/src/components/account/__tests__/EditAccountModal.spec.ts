@@ -416,7 +416,7 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_long_context_billing_enabled).toBe(false)
   })
 
-  it('defaults legacy OpenAI accounts to long-context billing disabled', async () => {
+  it('defaults legacy OpenAI accounts to long-context billing enabled', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset()
     checkMixedChannelRiskMock.mockReset()
@@ -425,12 +425,12 @@ describe('EditAccountModal', () => {
 
     const wrapper = mountModal(account)
     const toggle = wrapper.get('[data-testid="openai-long-context-billing-toggle"]')
-    expect(toggle.attributes('aria-checked')).toBe('false')
+    expect(toggle.attributes('aria-checked')).toBe('true')
 
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
-    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_long_context_billing_enabled).toBe(false)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_long_context_billing_enabled).toBe(true)
   })
 
   it('does not render or submit the long-context billing toggle for Spark shadow accounts', async () => {
