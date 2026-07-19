@@ -401,17 +401,6 @@ func allEasyPaySelections(selections []*payment.InstanceSelection) bool {
 }
 
 func validateEasyPayFailoverSelections(selections []*payment.InstanceSelection) error {
-	if len(selections) < 2 || !allEasyPaySelections(selections) {
-		return nil
-	}
-	for _, selection := range selections {
-		if strings.EqualFold(strings.TrimSpace(selection.PaymentMode), "popup") {
-			return infraerrors.BadRequest(
-				"EASYPAY_FAILOVER_REQUIRES_API_MODE",
-				"EasyPay primary/backup instances must use QR code mode",
-			)
-		}
-	}
 	return nil
 }
 

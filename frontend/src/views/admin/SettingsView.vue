@@ -11031,60 +11031,11 @@ function enableEasyPayFailoverWhenNeeded(
   return changed;
 }
 
-function findEasyPayFailoverPopupConflict(
-  candidate?: ProviderEnablementCandidate,
-): { method: "alipay" | "wxpay"; provider: ProviderEnablementCandidate } | null {
-  if (form.payment_load_balance_strategy !== "priority-failover") {
-    return null;
-  }
-
-  const candidateProviders: ProviderEnablementCandidate[] = providers.value.map(
-    (provider) => ({
-      id: provider.id,
-      provider_key: provider.provider_key,
-      supported_types: provider.supported_types,
-      enabled: provider.enabled,
-      name: provider.name,
-      payment_mode: provider.payment_mode,
-    }),
-  );
-  if (candidate) {
-    const index = candidateProviders.findIndex(
-      (provider) => provider.id === candidate.id,
-    );
-    if (index >= 0) candidateProviders[index] = candidate;
-    else candidateProviders.push(candidate);
-  }
-
-  for (const method of ["alipay", "wxpay"] as const) {
-    const matching = candidateProviders.filter(
-      (provider) =>
-        provider.enabled &&
-        provider.provider_key === "easypay" &&
-        getProviderVisibleMethods(provider).includes(method),
-    );
-    const popupProvider = matching.find(
-      (provider) => provider.payment_mode === "popup",
-    );
-    if (matching.length > 1 && popupProvider) {
-      return { method, provider: popupProvider };
-    }
-  }
-  return null;
-}
-
 function showEasyPayFailoverPopupConflict(
   candidate?: ProviderEnablementCandidate,
 ): boolean {
-  const conflict = findEasyPayFailoverPopupConflict(candidate);
-  if (!conflict) return false;
-  appStore.showError(
-    t("admin.settings.payment.failoverPopupConflict", {
-      method: t(`payment.methods.${conflict.method}`),
-      provider: conflict.provider.name,
-    }),
-  );
-  return true;
+  void candidate;
+  return false;
 }
 
 function showProviderEnablementConflict(

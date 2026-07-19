@@ -145,18 +145,18 @@ func TestEasyPayFailoverErrorClassification(t *testing.T) {
 	require.False(t, isSafeEasyPayFailoverError(payment.TypeAlipay, &payment.CreatePaymentRejectedError{}))
 }
 
-func TestValidateEasyPayFailoverSelectionsRejectsPopup(t *testing.T) {
+func TestValidateEasyPayFailoverSelectionsAllowsPopup(t *testing.T) {
 	t.Parallel()
 
 	err := validateEasyPayFailoverSelections([]*payment.InstanceSelection{
 		{ProviderKey: payment.TypeEasyPay, PaymentMode: "qrcode"},
 		{ProviderKey: payment.TypeEasyPay, PaymentMode: "popup"},
 	})
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	err = validateEasyPayFailoverSelections([]*payment.InstanceSelection{
-		{ProviderKey: payment.TypeEasyPay, PaymentMode: "qrcode"},
-		{ProviderKey: payment.TypeEasyPay, PaymentMode: "qrcode"},
+		{ProviderKey: payment.TypeEasyPay, PaymentMode: "popup"},
+		{ProviderKey: payment.TypeEasyPay, PaymentMode: "popup"},
 	})
 	require.NoError(t, err)
 }
