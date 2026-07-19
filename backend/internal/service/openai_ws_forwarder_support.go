@@ -331,8 +331,8 @@ func replaceOpenAIWSMessageModel(message []byte, fromModel, toModel string) []by
 		return message
 	}
 	modelValues := gjson.GetManyBytes(message, "model", "response.model")
-	replaceModel := modelValues[0].Exists() && modelValues[0].Str == fromModel
-	replaceResponseModel := modelValues[1].Exists() && modelValues[1].Str == fromModel
+	replaceModel := modelValues[0].Exists() && openAIResponseModelMatchesReplacementTarget(modelValues[0].Str, fromModel)
+	replaceResponseModel := modelValues[1].Exists() && openAIResponseModelMatchesReplacementTarget(modelValues[1].Str, fromModel)
 	if !replaceModel && !replaceResponseModel {
 		return message
 	}

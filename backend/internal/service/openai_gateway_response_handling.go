@@ -823,7 +823,7 @@ func (s *OpenAIGatewayService) replaceModelInSSELine(line, fromModel, toModel st
 	}
 
 	// 使用 gjson 精确检查 model 字段，避免全量 JSON 反序列化
-	if m := gjson.Get(data, "model"); m.Exists() && m.Str == fromModel {
+	if m := gjson.Get(data, "model"); m.Exists() && openAIResponseModelMatchesReplacementTarget(m.Str, fromModel) {
 		newData, err := sjson.Set(data, "model", toModel)
 		if err != nil {
 			return line
@@ -832,7 +832,7 @@ func (s *OpenAIGatewayService) replaceModelInSSELine(line, fromModel, toModel st
 	}
 
 	// 检查嵌套的 response.model 字段
-	if m := gjson.Get(data, "response.model"); m.Exists() && m.Str == fromModel {
+	if m := gjson.Get(data, "response.model"); m.Exists() && openAIResponseModelMatchesReplacementTarget(m.Str, fromModel) {
 		newData, err := sjson.Set(data, "response.model", toModel)
 		if err != nil {
 			return line
