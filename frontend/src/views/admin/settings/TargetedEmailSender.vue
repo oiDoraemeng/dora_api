@@ -15,6 +15,10 @@
             <input v-model="selectCurrentPage" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
             选择本页
           </label>
+          <div class="flex w-full gap-2 sm:w-auto">
+            <input v-model="searchQuery" type="search" class="input min-w-0 flex-1 sm:w-64" placeholder="搜索邮箱、用户名或备注" @keyup.enter="searchUsers" />
+            <button type="button" class="btn btn-secondary btn-sm shrink-0" :disabled="loadingUsers" @click="searchUsers">搜索</button>
+          </div>
           <div class="flex items-center gap-2">
             <select v-model.number="pageSize" class="input h-9 w-24 py-1 text-sm">
               <option :value="10">10 / 页</option>
@@ -26,32 +30,38 @@
         </div>
 
         <div class="overflow-x-auto rounded-lg border border-gray-200 dark:border-dark-700">
-          <table class="w-full min-w-[610px] text-left text-sm">
+          <table class="w-full min-w-[1080px] text-left text-sm">
             <thead class="bg-gray-50 text-xs text-gray-500 dark:bg-dark-800 dark:text-gray-400">
               <tr>
                 <th class="w-12 px-4 py-3"></th>
                 <th class="px-3 py-3 font-medium">用户</th>
-                <th class="px-3 py-3 font-medium">余额</th>
+                <th class="px-3 py-3 font-medium"><button type="button" class="inline-flex items-center gap-1 hover:text-gray-900 dark:hover:text-white" :aria-label="sortAriaLabel('balance', '余额')" @click="toggleSort('balance')">余额 <span class="text-[10px]">{{ sortIndicator('balance') }}</span></button></th>
+                <th class="px-3 py-3 font-medium"><button type="button" class="inline-flex items-center gap-1 hover:text-gray-900 dark:hover:text-white" :aria-label="sortAriaLabel('usage', '用量')" @click="toggleSort('usage')">用量 <span class="text-[10px]">{{ sortIndicator('usage') }}</span></button></th>
                 <th class="px-3 py-3 font-medium">状态</th>
-                <th class="px-3 py-3 font-medium">最近活跃</th>
+                <th class="px-3 py-3 font-medium">备注</th>
+                <th class="px-3 py-3 font-medium"><button type="button" class="inline-flex items-center gap-1 hover:text-gray-900 dark:hover:text-white" :aria-label="sortAriaLabel('last_active_at', '最后活跃')" @click="toggleSort('last_active_at')">最后活跃 <span class="text-[10px]">{{ sortIndicator('last_active_at') }}</span></button></th>
+                <th class="px-3 py-3 font-medium"><button type="button" class="inline-flex items-center gap-1 hover:text-gray-900 dark:hover:text-white" :aria-label="sortAriaLabel('last_used_at', '最后使用')" @click="toggleSort('last_used_at')">最后使用 <span class="text-[10px]">{{ sortIndicator('last_used_at') }}</span></button></th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
-              <tr v-if="loadingUsers"><td colspan="5" class="px-4 py-10 text-center text-gray-500">正在加载用户...</td></tr>
-              <tr v-else-if="users.length === 0"><td colspan="5" class="px-4 py-10 text-center text-gray-500">暂无可发送邮件的用户</td></tr>
-              <tr v-for="user in users" :key="user.id" class="hover:bg-gray-50/70 dark:hover:bg-dark-800/50">
+              <tr v-if="loadingUsers"><td colspan="8" class="px-4 py-10 text-center text-gray-500">正在加载用户...</td></tr>
+              <tr v-else-if="users.length === 0"><td colspan="8" class="px-4 py-10 text-center text-gray-500">暂无匹配的用户</td></tr>
+              <tr v-for="user in sortedUsers" :key="user.id" class="hover:bg-gray-50/70 dark:hover:bg-dark-800/50">
                 <td class="px-4 py-3"><input v-model="selectedEmails" :value="user.email" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" /></td>
                 <td class="px-3 py-3"><p class="font-medium text-gray-900 dark:text-white">{{ user.email }}</p><p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">{{ user.username || `用户 #${user.id}` }}</p></td>
                 <td class="px-3 py-3 font-medium text-gray-900 dark:text-white">{{ formatBalance(user.balance) }}</td>
+                <td class="px-3 py-3 text-xs text-gray-600 dark:text-gray-300"><template v-if="usageStats[user.id]"><p>今日 {{ formatBalance(usageStats[user.id].today_actual_cost) }}</p><p class="mt-0.5 text-gray-500 dark:text-gray-400">累计 {{ formatBalance(usageStats[user.id].total_actual_cost) }}</p></template><span v-else class="text-gray-400">{{ loadingUsage ? '加载中...' : '-' }}</span></td>
                 <td class="px-3 py-3"><span :class="user.status === 'active' ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500'">{{ user.status === 'active' ? '正常' : '已禁用' }}</span></td>
+                <td class="max-w-48 truncate px-3 py-3 text-xs text-gray-500 dark:text-gray-400" :title="user.notes || ''">{{ user.notes || '-' }}</td>
                 <td class="px-3 py-3 text-xs text-gray-500 dark:text-gray-400">{{ formatDate(user.last_active_at) }}</td>
+                <td class="px-3 py-3 text-xs text-gray-500 dark:text-gray-400">{{ formatDate(user.last_used_at) }}</td>
               </tr>
             </tbody>
           </table>
         </div>
 
         <div class="flex flex-wrap items-center justify-between gap-3 text-sm text-gray-500 dark:text-gray-400">
-          <span>共 {{ total }} 位用户，当前按余额升序</span>
+          <span>共 {{ total }} 位用户，当前按 {{ currentSortLabel }}</span>
           <div class="flex items-center gap-2"><button type="button" class="btn btn-secondary btn-sm" :disabled="page <= 1 || loadingUsers" @click="page--">上一页</button><span>第 {{ page }} / {{ totalPages }} 页</span><button type="button" class="btn btn-secondary btn-sm" :disabled="page >= totalPages || loadingUsers" @click="page++">下一页</button></div>
         </div>
       </div>
@@ -83,6 +93,7 @@ import { adminAPI } from '@/api'
 import { useAppStore } from '@/stores'
 import type { AdminUser } from '@/types'
 import { extractApiErrorMessage } from '@/utils/apiError'
+import type { BatchUserUsageStats } from '@/api/admin/dashboard'
 
 type TemplateKey = 'thanks' | 'offer' | 'promotion' | 'notice'
 type EmailTemplate = { key: TemplateKey; label: string; subject: string; body: string }
@@ -126,6 +137,13 @@ const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
 const loadingUsers = ref(false)
+const loadingUsage = ref(false)
+const searchQuery = ref('')
+type SortKey = 'balance' | 'usage' | 'last_active_at' | 'last_used_at'
+const sortKey = ref<SortKey>('balance')
+const sortOrder = ref<'asc' | 'desc'>('asc')
+const usageStats = ref<Record<string, BatchUserUsageStats>>({})
+let usageRequestSequence = 0
 const templateKey = ref<TemplateKey>('thanks')
 const subject = ref(templates[0].subject)
 const body = ref(templates[0].body)
@@ -136,6 +154,19 @@ const sendSummary = ref<{ sent: number; failed: number } | null>(null)
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
 const pageEmails = computed(() => users.value.map((user) => user.email))
+const sortedUsers = computed(() => {
+  if (sortKey.value !== 'usage') return users.value
+  const multiplier = sortOrder.value === 'asc' ? 1 : -1
+  return [...users.value].sort((left, right) => {
+    const leftUsage = usageStats.value[left.id]?.total_actual_cost ?? 0
+    const rightUsage = usageStats.value[right.id]?.total_actual_cost ?? 0
+    return (leftUsage - rightUsage) * multiplier
+  })
+})
+const currentSortLabel = computed(() => {
+  const labels: Record<SortKey, string> = { balance: '余额', usage: '累计用量', last_active_at: '最后活跃时间', last_used_at: '最后使用时间' }
+  return `${labels[sortKey.value]}${sortOrder.value === 'asc' ? '升序' : '降序'}`
+})
 const selectCurrentPage = computed({
   get: () => pageEmails.value.length > 0 && pageEmails.value.every((email) => selectedEmails.value.includes(email)),
   set: (checked: boolean) => {
@@ -150,15 +181,37 @@ const previewHTML = computed(() => body.value)
 
 function isEmail(value: string): boolean { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim()) }
 function formatBalance(value: number): string { return `$${Number(value || 0).toFixed(2)}` }
-function formatDate(value?: string | null): string { return value ? new Date(value).toLocaleString() : '从未活跃' }
+function formatDate(value?: string | null): string { return value ? new Date(value).toLocaleString() : '-' }
 function applyTemplate(key: TemplateKey): void { const item = templates.find((candidate) => candidate.key === key); if (!item) return; templateKey.value = key; subject.value = item.subject; body.value = item.body; sendSummary.value = null }
+function searchUsers(): void { if (page.value === 1) void loadUsers(); else page.value = 1 }
+function sortIndicator(key: SortKey): string { return sortKey.value === key ? (sortOrder.value === 'asc' ? 'ASC' : 'DESC') : '' }
+function sortAriaLabel(key: SortKey, label: string): string { return `${label}，${sortKey.value === key ? (sortOrder.value === 'asc' ? '当前升序，点击改为降序' : '当前降序，点击改为升序') : '点击排序'}` }
+function toggleSort(key: SortKey): void {
+  if (sortKey.value === key) sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
+  else { sortKey.value = key; sortOrder.value = key === 'balance' ? 'asc' : 'desc' }
+  if (page.value === 1) void loadUsers(); else page.value = 1
+}
 
 async function loadUsers(): Promise<void> {
   loadingUsers.value = true
+  const requestSequence = ++usageRequestSequence
+  usageStats.value = {}
+  loadingUsage.value = false
   try {
-    const response = await adminAPI.users.list(page.value, pageSize.value, { sort_by: 'balance', sort_order: 'asc', include_subscriptions: false })
+    const response = await adminAPI.users.list(page.value, pageSize.value, { search: searchQuery.value.trim() || undefined, sort_by: sortKey.value === 'usage' ? 'balance' : sortKey.value, sort_order: sortOrder.value, include_subscriptions: false })
     users.value = response.items
     total.value = response.total
+    if (response.items.length > 0) {
+      loadingUsage.value = true
+      try {
+        const result = await adminAPI.dashboard.getBatchUsersUsage(response.items.map((user) => user.id))
+        if (requestSequence === usageRequestSequence) usageStats.value = result.stats
+      } catch (error) {
+        if (requestSequence === usageRequestSequence) appStore.showError(extractApiErrorMessage(error))
+      } finally {
+        if (requestSequence === usageRequestSequence) loadingUsage.value = false
+      }
+    }
   } catch (error) { appStore.showError(extractApiErrorMessage(error)) } finally { loadingUsers.value = false }
 }
 
