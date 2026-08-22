@@ -45,16 +45,8 @@ const (
 type OpenAIImagesCapability string
 
 const (
-	OpenAIImagesCapabilityBasic      OpenAIImagesCapability = "images-basic"
-	OpenAIImagesCapabilityNative     OpenAIImagesCapability = "images-native"
-	OpenAIImagesCapabilityChatGPTWeb OpenAIImagesCapability = "images-chatgpt-web"
-)
-
-type OpenAIImagesGenerationBackend string
-
-const (
-	OpenAIImagesGenerationBackendOpenAIImages OpenAIImagesGenerationBackend = "openai_images"
-	OpenAIImagesGenerationBackendChatGPTWeb   OpenAIImagesGenerationBackend = "chatgpt_web"
+	OpenAIImagesCapabilityBasic  OpenAIImagesCapability = "images-basic"
+	OpenAIImagesCapabilityNative OpenAIImagesCapability = "images-native"
 )
 
 type OpenAIImagesUpload struct {
@@ -89,7 +81,6 @@ type OpenAIImagesRequest struct {
 	PartialImages      *int
 	HasMask            bool
 	HasNativeOptions   bool
-	GenerationBackend  OpenAIImagesGenerationBackend
 	RequiredCapability OpenAIImagesCapability
 	InputImageURLs     []string
 	MaskImageURL       string
@@ -97,7 +88,6 @@ type OpenAIImagesRequest struct {
 	MaskUpload         *OpenAIImagesUpload
 	Body               []byte
 	bodyHash           string
-	TaskID             string
 }
 
 func (r *OpenAIImagesRequest) ModerationBody() []byte {
@@ -239,7 +229,6 @@ func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
 		req.ExplicitModel = req.Model != ""
 	}
 	req.Prompt = strings.TrimSpace(gjson.GetBytes(body, "prompt").String())
-	req.TaskID = strings.TrimSpace(gjson.GetBytes(body, "task_id").String())
 
 	if streamResult := gjson.GetBytes(body, "stream"); streamResult.Exists() {
 		if streamResult.Type != gjson.True && streamResult.Type != gjson.False {
@@ -247,7 +236,6 @@ func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
 		}
 		req.Stream = streamResult.Bool()
 	}
-	req.GenerationBackend = parseOpenAIImagesGenerationBackendFromJSON(body)
 
 	if nResult := gjson.GetBytes(body, "n"); nResult.Exists() {
 		if nResult.Type != gjson.Number {
@@ -435,8 +423,6 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 			}
 			req.PartialImages = &n
 			req.HasNativeOptions = true
-		case "generation_backend", "generation_method", "image_backend":
-			req.GenerationBackend = normalizeOpenAIImagesGenerationBackend(value)
 		default:
 			if isOpenAINativeImageOption(name) && value != "" {
 				req.HasNativeOptions = true
@@ -463,12 +449,9 @@ func applyOpenAIImagesDefaults(req *OpenAIImagesRequest) {
 	}
 	if strings.TrimSpace(req.Model) != "" {
 		req.Model = strings.TrimSpace(req.Model)
-	} else {
-		req.Model = "gpt-image-2"
+		return
 	}
-	if req.GenerationBackend == "" {
-		req.GenerationBackend = OpenAIImagesGenerationBackendOpenAIImages
-	}
+	req.Model = "gpt-image-2"
 }
 
 func isOpenAIImageGenerationModel(model string) bool {
@@ -515,9 +498,6 @@ func classifyOpenAIImagesCapability(req *OpenAIImagesRequest) OpenAIImagesCapabi
 	if req == nil {
 		return OpenAIImagesCapabilityNative
 	}
-	if req.GenerationBackend == OpenAIImagesGenerationBackendChatGPTWeb {
-		return OpenAIImagesCapabilityChatGPTWeb
-	}
 	if req.ExplicitModel || req.ExplicitSize {
 		return OpenAIImagesCapabilityNative
 	}
@@ -535,28 +515,6 @@ func classifyOpenAIImagesCapability(req *OpenAIImagesRequest) OpenAIImagesCapabi
 		return OpenAIImagesCapabilityNative
 	}
 	return OpenAIImagesCapabilityBasic
-}
-
-func parseOpenAIImagesGenerationBackendFromJSON(body []byte) OpenAIImagesGenerationBackend {
-	for _, path := range []string{"generation_backend", "generation_method", "image_backend"} {
-		if value := strings.TrimSpace(gjson.GetBytes(body, path).String()); value != "" {
-			return normalizeOpenAIImagesGenerationBackend(value)
-		}
-	}
-	return ""
-}
-
-func normalizeOpenAIImagesGenerationBackend(value string) OpenAIImagesGenerationBackend {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	normalized = strings.ReplaceAll(normalized, "-", "_")
-	switch normalized {
-	case "", "openai", "openai_images", "official", "images_api", "openai_images_api":
-		return OpenAIImagesGenerationBackendOpenAIImages
-	case "chatgpt2api", "chatgpt_web", "chatgpt", "web", "picture_v2":
-		return OpenAIImagesGenerationBackendChatGPTWeb
-	default:
-		return OpenAIImagesGenerationBackendOpenAIImages
-	}
 }
 
 func hasOpenAINativeImageOptions(exists func(path string) bool) bool {
@@ -604,10 +562,7 @@ func (s *OpenAIGatewayService) ForwardImages(
 	switch account.Type {
 	case AccountTypeAPIKey:
 		return s.forwardOpenAIImagesAPIKey(ctx, c, account, body, parsed, channelMappedModel)
-	case AccountTypeOAuth:
-		if parsed.GenerationBackend == OpenAIImagesGenerationBackendChatGPTWeb {
-			return s.forwardOpenAIImagesOAuthChatGPTWeb(ctx, c, account, parsed, channelMappedModel)
-		}
+	case AccountTypeOAuth, AccountTypeSetupToken:
 		return s.forwardOpenAIImagesOAuth(ctx, c, account, parsed, channelMappedModel)
 	default:
 		return nil, fmt.Errorf("unsupported account type: %s", account.Type)
@@ -634,6 +589,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	if err := validateOpenAIImagesModel(upstreamModel); err != nil {
 		return nil, err
 	}
+	SetOpsUpstreamModel(c, upstreamModel)
 	logger.LegacyPrintf(
 		"service.openai_gateway",
 		"[OpenAI] Images request routing request_model=%s upstream_model=%s endpoint=%s account_type=%s",
@@ -646,7 +602,12 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	if err != nil {
 		return nil, err
 	}
-	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, parsed.Stream)
+	// 生图是长耗时、上游侧已产生实际成本的操作：客户端中途断开不应连带取消上游请求。
+	// detachStreamUpstreamContext 在非流式时原样返回请求 context，于是客户端一断开
+	// 就把已经在出图的上游调用打断成 context canceled，网关记 502、不扣费，而上游那边
+	// 图已经生成并计费。同一端点的 OAuth 分支 forwardOpenAIImagesOAuth 以及 Grok 媒体
+	// 路径本来就无条件脱钩，这里对齐；上游侧仍由 ResponseHeaderTimeout 兜底。
+	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	defer releaseUpstreamCtx()
 
 	token, _, err := s.GetAccessToken(upstreamCtx, account)
@@ -698,11 +659,14 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 				Message:            upstreamMsg,
 			})
 			shouldDisable := s.handleFailoverSideEffects(upstreamCtx, resp, account, respBody, upstreamModel)
-			return nil, &UpstreamFailoverError{
-				StatusCode:             resp.StatusCode,
-				ResponseBody:           respBody,
-				RetryableOnSameAccount: !shouldDisable && account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			retryableOnSameAccount := !shouldDisable && account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode)
+			if account.IsOpenAIOAuthLike() && resp.StatusCode == http.StatusTooManyRequests {
+				return nil, s.newOpenAIAccountFailoverError(account, resp.StatusCode, resp.Header, respBody, upstreamMsg, shouldDisable, retryableOnSameAccount)
 			}
+			if isOpenAIHTTPUpstreamAccessStateError(resp.StatusCode, upstreamMsg, respBody) {
+				return nil, newOpenAIUpstreamFailoverError(resp.StatusCode, resp.Header, respBody, upstreamMsg, retryableOnSameAccount)
+			}
+			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody, RetryableOnSameAccount: retryableOnSameAccount}
 		}
 		return s.handleOpenAIImagesErrorResponse(upstreamCtx, resp, c, account, upstreamModel)
 	}
@@ -838,22 +802,17 @@ func buildOpenAIImagesURL(base string, endpoint string) string {
 
 func rewriteOpenAIImagesModel(body []byte, contentType string, model string) ([]byte, string, error) {
 	model = strings.TrimSpace(model)
+	if model == "" {
+		return body, contentType, nil
+	}
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err == nil && strings.EqualFold(mediaType, "multipart/form-data") {
 		rewrittenBody, rewrittenType, rewriteErr := rewriteOpenAIImagesMultipartModel(body, contentType, model)
 		return rewrittenBody, rewrittenType, rewriteErr
 	}
-	rewritten := body
-	if model != "" {
-		rewritten, err = sjson.SetBytes(rewritten, "model", model)
-		if err != nil {
-			return nil, "", fmt.Errorf("rewrite image request model: %w", err)
-		}
-	}
-	for _, path := range []string{"generation_backend", "generation_method", "image_backend", "task_id"} {
-		if gjson.GetBytes(rewritten, path).Exists() {
-			rewritten, _ = sjson.DeleteBytes(rewritten, path)
-		}
+	rewritten, err := sjson.SetBytes(body, "model", model)
+	if err != nil {
+		return nil, "", fmt.Errorf("rewrite image request model: %w", err)
 	}
 	return rewritten, contentType, nil
 }
@@ -884,10 +843,6 @@ func rewriteOpenAIImagesMultipartModel(body []byte, contentType string, model st
 
 		formName := strings.TrimSpace(part.FormName())
 		partHeader := cloneMultipartHeader(part.Header)
-		if part.FileName() == "" && isOpenAIImagesLocalOnlyField(formName) {
-			_ = part.Close()
-			continue
-		}
 		target, err := writer.CreatePart(partHeader)
 		if err != nil {
 			_ = part.Close()
@@ -919,15 +874,6 @@ func rewriteOpenAIImagesMultipartModel(body []byte, contentType string, model st
 		return nil, "", fmt.Errorf("finalize multipart body: %w", err)
 	}
 	return buffer.Bytes(), writer.FormDataContentType(), nil
-}
-
-func isOpenAIImagesLocalOnlyField(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "generation_backend", "generation_method", "image_backend", "task_id":
-		return true
-	default:
-		return false
-	}
 }
 
 func cloneMultipartHeader(src textproto.MIMEHeader) textproto.MIMEHeader {
