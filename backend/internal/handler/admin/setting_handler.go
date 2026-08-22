@@ -62,6 +62,7 @@ type SettingHandler struct {
 	notificationEmailService *service.NotificationEmailService
 	totpService              *service.TotpService
 	userService              *service.UserService
+	targetedEmailDeliveries  *service.TargetedEmailDeliveryService
 }
 
 // NewSettingHandler 创建系统设置处理器
@@ -83,10 +84,13 @@ func (h *SettingHandler) SetNotificationEmailService(notificationEmailService *s
 	h.notificationEmailService = notificationEmailService
 }
 
-// SetAliyunCaptchaService attaches the Aliyun captcha credential validator without
+	// SetAliyunCaptchaService attaches the Aliyun captcha credential validator without
 // changing the constructor signature used by existing unit tests.
 func (h *SettingHandler) SetAliyunCaptchaService(aliyunCaptchaService *service.AliyunCaptchaService) {
 	h.aliyunCaptchaService = aliyunCaptchaService
+
+	func (h *SettingHandler) SetTargetedEmailDeliveryService(targetedEmailDeliveries *service.TargetedEmailDeliveryService) {
+		h.targetedEmailDeliveries = targetedEmailDeliveries
 }
 
 // SetStepUpDeps attaches the services backing the step-up switch preconditions

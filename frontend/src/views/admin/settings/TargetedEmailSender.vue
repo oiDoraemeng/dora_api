@@ -39,20 +39,22 @@
                 <th class="px-3 py-3 font-medium"><button type="button" class="inline-flex items-center gap-1 hover:text-gray-900 dark:hover:text-white" :aria-label="sortAriaLabel('usage', '用量')" @click="toggleSort('usage')">用量 <span class="text-[10px]">{{ sortIndicator('usage') }}</span></button></th>
                 <th class="px-3 py-3 font-medium">状态</th>
                 <th class="px-3 py-3 font-medium">备注</th>
+                <th class="px-3 py-3 font-medium">邮件记录</th>
                 <th class="px-3 py-3 font-medium"><button type="button" class="inline-flex items-center gap-1 hover:text-gray-900 dark:hover:text-white" :aria-label="sortAriaLabel('last_active_at', '最后活跃')" @click="toggleSort('last_active_at')">最后活跃 <span class="text-[10px]">{{ sortIndicator('last_active_at') }}</span></button></th>
                 <th class="px-3 py-3 font-medium"><button type="button" class="inline-flex items-center gap-1 hover:text-gray-900 dark:hover:text-white" :aria-label="sortAriaLabel('last_used_at', '最后使用')" @click="toggleSort('last_used_at')">最后使用 <span class="text-[10px]">{{ sortIndicator('last_used_at') }}</span></button></th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
-              <tr v-if="loadingUsers"><td colspan="8" class="px-4 py-10 text-center text-gray-500">正在加载用户...</td></tr>
-              <tr v-else-if="users.length === 0"><td colspan="8" class="px-4 py-10 text-center text-gray-500">暂无匹配的用户</td></tr>
+              <tr v-if="loadingUsers"><td colspan="9" class="px-4 py-10 text-center text-gray-500">正在加载用户...</td></tr>
+              <tr v-else-if="users.length === 0"><td colspan="9" class="px-4 py-10 text-center text-gray-500">暂无匹配的用户</td></tr>
               <tr v-for="user in sortedUsers" :key="user.id" class="hover:bg-gray-50/70 dark:hover:bg-dark-800/50">
-                <td class="px-4 py-3"><input v-model="selectedEmails" :value="user.email" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" /></td>
+                <td class="px-4 py-3"><input v-model="selectedEmails" :value="user.email" type="checkbox" :disabled="deliveryStatuses[user.email]?.sent_current" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50" /></td>
                 <td class="px-3 py-3"><p class="font-medium text-gray-900 dark:text-white">{{ user.email }}</p><p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">{{ user.username || `用户 #${user.id}` }}</p></td>
                 <td class="px-3 py-3 font-medium text-gray-900 dark:text-white">{{ formatBalance(user.balance) }}</td>
                 <td class="px-3 py-3 text-xs text-gray-600 dark:text-gray-300"><template v-if="usageStats[user.id]"><p>今日 {{ formatBalance(usageStats[user.id].today_actual_cost) }}</p><p class="mt-0.5 text-gray-500 dark:text-gray-400">累计 {{ formatBalance(usageStats[user.id].total_actual_cost) }}</p></template><span v-else class="text-gray-400">{{ loadingUsage ? '加载中...' : '-' }}</span></td>
                 <td class="px-3 py-3"><span :class="user.status === 'active' ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500'">{{ user.status === 'active' ? '正常' : '已禁用' }}</span></td>
                 <td class="max-w-48 truncate px-3 py-3 text-xs text-gray-500 dark:text-gray-400" :title="user.notes || ''">{{ user.notes || '-' }}</td>
+                <td class="px-3 py-3 text-xs"><p v-if="deliveryStatuses[user.email]?.sent_current" class="font-medium text-amber-600 dark:text-amber-400">本模板已发送</p><p v-else class="text-gray-400">未发送当前模板</p><p v-if="deliveryStatuses[user.email]?.last_sent_at" class="mt-0.5 text-gray-500 dark:text-gray-400">{{ formatDate(deliveryStatuses[user.email].last_sent_at) }}</p></td>
                 <td class="px-3 py-3 text-xs text-gray-500 dark:text-gray-400">{{ formatDate(user.last_active_at) }}</td>
                 <td class="px-3 py-3 text-xs text-gray-500 dark:text-gray-400">{{ formatDate(user.last_used_at) }}</td>
               </tr>
@@ -69,9 +71,9 @@
       <div class="min-w-0 space-y-4 border-t border-gray-100 pt-6 dark:border-dark-700">
         <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(22rem,0.9fr)]">
           <div class="space-y-4">
-            <div class="grid grid-cols-2 gap-2">
+            <div class="flex items-center gap-2"><div class="grid flex-1 grid-cols-2 gap-2">
               <button v-for="item in templates" :key="item.key" type="button" class="rounded-md border px-3 py-2 text-sm font-medium transition-colors" :class="templateKey === item.key ? 'border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-950/30 dark:text-primary-300' : 'border-gray-200 text-gray-600 hover:border-primary-300 dark:border-dark-600 dark:text-gray-300'" @click="applyTemplate(item.key)">{{ item.label }}</button>
-            </div>
+            </div><button type="button" class="btn btn-secondary btn-sm shrink-0" :disabled="savingTemplates" @click="saveTemplates">{{ savingTemplates ? '保存中' : '保存模板' }}</button></div>
             <div><label class="input-label" for="targeted-email-subject">邮件主题</label><input id="targeted-email-subject" v-model="subject" class="input" maxlength="200" /></div>
             <div><label class="input-label" for="targeted-email-body">邮件 HTML</label><textarea id="targeted-email-body" v-model="body" rows="18" class="input resize-y font-mono text-sm leading-[1.75rem]" maxlength="50000"></textarea></div>
           </div>
@@ -123,12 +125,12 @@ function createEmailTemplate(accent: string, title: string, content: string): st
 </html>`
 }
 
-const templates: EmailTemplate[] = [
+const templates = ref<EmailTemplate[]>([
   { key: 'thanks', label: '感谢邮件', subject: '感谢您一直以来的支持', body: createEmailTemplate('#4f46e5', '感谢您的支持', '<p>您好，</p><p>感谢您选择并使用 Dora2API。您的支持是我们持续改进的动力。</p><p>如有任何建议或需要帮助，欢迎随时联系我们。</p><p>祝您使用愉快！</p>') },
   { key: 'offer', label: '优惠邮件', subject: '专属优惠，限时领取', body: createEmailTemplate('#16a34a', '专属优惠，限时领取', '<p>您好，</p><p>我们为您准备了一份 Dora2API 专属优惠，欢迎前往充值页面查看并领取。</p><p>优惠数量有限，请及时使用。</p><p>感谢您的支持！</p>') },
   { key: 'promotion', label: '推广邮件', subject: '服务新功能与活动推荐', body: createEmailTemplate('#0891b2', '服务新功能与活动推荐', '<p>您好，</p><p>Dora2API 近期更新了服务能力，并准备了新的活动内容。欢迎登录平台了解详情。</p><p>期待继续为您提供服务！</p>') },
   { key: 'notice', label: '通知邮件', subject: 'Dora2API 服务通知', body: createEmailTemplate('#ea580c', 'Dora2API 服务通知', '<p>您好，</p><p>这里是一条来自 Dora2API 的服务通知。请登录平台查看相关信息并及时处理。</p><p>感谢您的理解与支持。</p>') },
-]
+])
 
 const appStore = useAppStore()
 const users = ref<AdminUser[]>([])
@@ -143,17 +145,19 @@ type SortKey = 'balance' | 'usage' | 'last_active_at' | 'last_used_at'
 const sortKey = ref<SortKey>('balance')
 const sortOrder = ref<'asc' | 'desc'>('asc')
 const usageStats = ref<Record<string, BatchUserUsageStats>>({})
+const deliveryStatuses = ref<Record<string, { last_sent_at?: string; sent_current: boolean }>>({})
 let usageRequestSequence = 0
 const templateKey = ref<TemplateKey>('thanks')
-const subject = ref(templates[0].subject)
-const body = ref(templates[0].body)
+const subject = ref(templates.value[0].subject)
+const body = ref(templates.value[0].body)
+const savingTemplates = ref(false)
 const testRecipient = ref('')
 const sendingTest = ref(false)
 const sendingBatch = ref(false)
 const sendSummary = ref<{ sent: number; failed: number } | null>(null)
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
-const pageEmails = computed(() => users.value.map((user) => user.email))
+const pageEmails = computed(() => users.value.filter((user) => !deliveryStatuses.value[user.email]?.sent_current).map((user) => user.email))
 const sortedUsers = computed(() => {
   if (sortKey.value !== 'usage') return users.value
   const multiplier = sortOrder.value === 'asc' ? 1 : -1
@@ -182,7 +186,10 @@ const previewHTML = computed(() => body.value)
 function isEmail(value: string): boolean { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim()) }
 function formatBalance(value: number): string { return `$${Number(value || 0).toFixed(2)}` }
 function formatDate(value?: string | null): string { return value ? new Date(value).toLocaleString() : '-' }
-function applyTemplate(key: TemplateKey): void { const item = templates.find((candidate) => candidate.key === key); if (!item) return; templateKey.value = key; subject.value = item.subject; body.value = item.body; sendSummary.value = null }
+function syncCurrentTemplate(): void { const item = templates.value.find((candidate) => candidate.key === templateKey.value); if (item) { item.subject = subject.value; item.body = body.value } }
+function applyTemplate(key: TemplateKey): void { syncCurrentTemplate(); const item = templates.value.find((candidate) => candidate.key === key); if (!item) return; templateKey.value = key; subject.value = item.subject; body.value = item.body; sendSummary.value = null }
+async function saveTemplates(): Promise<void> { syncCurrentTemplate(); savingTemplates.value = true; try { await adminAPI.settings.saveTargetedEmailTemplates(templates.value.map(({ key, subject, body }) => ({ key, subject, body }))); appStore.showSuccess('邮件模板已保存') } catch (error) { appStore.showError(extractApiErrorMessage(error)) } finally { savingTemplates.value = false } }
+async function loadTemplates(): Promise<void> { try { const result = await adminAPI.settings.getTargetedEmailTemplates(); if (result.templates.length !== 4) return; const saved = new Map(result.templates.map((item) => [item.key, item])); templates.value = templates.value.map((item) => saved.has(item.key) ? { ...item, ...saved.get(item.key)! } : item); applyTemplate(templateKey.value) } catch (error) { appStore.showError(extractApiErrorMessage(error)) } }
 function searchUsers(): void { if (page.value === 1) void loadUsers(); else page.value = 1 }
 function sortIndicator(key: SortKey): string { return sortKey.value === key ? (sortOrder.value === 'asc' ? 'ASC' : 'DESC') : '' }
 function sortAriaLabel(key: SortKey, label: string): string { return `${label}，${sortKey.value === key ? (sortOrder.value === 'asc' ? '当前升序，点击改为降序' : '当前降序，点击改为升序') : '点击排序'}` }
@@ -201,6 +208,7 @@ async function loadUsers(): Promise<void> {
     const response = await adminAPI.users.list(page.value, pageSize.value, { search: searchQuery.value.trim() || undefined, sort_by: sortKey.value === 'usage' ? 'balance' : sortKey.value, sort_order: sortOrder.value, include_subscriptions: false })
     users.value = response.items
     total.value = response.total
+		void loadDeliveryStatuses()
     if (response.items.length > 0) {
       loadingUsage.value = true
       try {
@@ -215,6 +223,15 @@ async function loadUsers(): Promise<void> {
   } catch (error) { appStore.showError(extractApiErrorMessage(error)) } finally { loadingUsers.value = false }
 }
 
+async function loadDeliveryStatuses(): Promise<void> {
+  if (!subject.value.trim() || !body.value.trim() || users.value.length === 0) { deliveryStatuses.value = {}; return }
+  try {
+    const result = await adminAPI.settings.getTargetedEmailDeliveryStatuses(requestPayload(users.value.map((user) => user.email)))
+    deliveryStatuses.value = result.statuses
+    selectedEmails.value = selectedEmails.value.filter((email) => !result.statuses[email]?.sent_current)
+  } catch (error) { appStore.showError(extractApiErrorMessage(error)) }
+}
+
 function requestPayload(recipients: string[]) { return { recipients, subject: subject.value.trim(), html: previewHTML.value } }
 async function sendTest(): Promise<void> {
   sendingTest.value = true
@@ -227,11 +244,12 @@ async function sendBatch(): Promise<void> {
   try {
     const result = await adminAPI.settings.sendTargetedEmailBatch(requestPayload(selectedEmails.value))
     sendSummary.value = result
-    result.failed ? appStore.showError(`发送完成，${result.failed} 封失败`) : appStore.showSuccess(`已成功发送 ${result.sent} 封邮件`)
+    result.failed ? appStore.showError(`发送完成，${result.failed} 封失败`) : appStore.showSuccess(`已成功发送 ${result.sent} 封邮件${result.skipped ? `，跳过 ${result.skipped} 封已发送邮件` : ''}`)
+		void loadDeliveryStatuses()
   } catch (error) { appStore.showError(extractApiErrorMessage(error)) } finally { sendingBatch.value = false }
 }
 
 watch(pageSize, () => { page.value = 1 })
 watch([page, pageSize], loadUsers)
-onMounted(loadUsers)
+onMounted(() => { void loadTemplates(); void loadUsers() })
 </script>

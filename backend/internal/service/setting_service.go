@@ -371,6 +371,16 @@ func (s *SettingService) GetAllSettings(ctx context.Context) (*SystemSettings, e
 	return s.parseSettings(settings), nil
 }
 
+const targetedEmailTemplatesSettingKey = "targeted_email_templates"
+
+func (s *SettingService) GetTargetedEmailTemplates(ctx context.Context) (string, error) {
+	return s.settingRepo.GetValue(ctx, targetedEmailTemplatesSettingKey)
+}
+
+func (s *SettingService) SaveTargetedEmailTemplates(ctx context.Context, value string) error {
+	return s.settingRepo.Set(ctx, targetedEmailTemplatesSettingKey, value)
+}
+
 // SetOnUpdateCallback sets a callback function to be called when settings are updated
 // This is used for cache invalidation (e.g., HTML cache in frontend server)
 func (s *SettingService) SetOnUpdateCallback(callback func()) {

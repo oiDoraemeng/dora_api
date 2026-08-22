@@ -1124,8 +1124,12 @@ export interface TargetedEmailRequest {
 export interface TargetedEmailResult {
   sent: number;
   failed: number;
+	 skipped: number;
   errors?: string[];
 }
+
+export interface TargetedEmailDeliveryStatus { last_sent_at?: string; sent_current: boolean }
+export interface TargetedEmailTemplate { key: 'thanks' | 'offer' | 'promotion' | 'notice'; subject: string; body: string }
 
 export async function sendTargetedEmailTest(
   request: TargetedEmailRequest,
@@ -1146,6 +1150,14 @@ export async function sendTargetedEmailBatch(
   );
   return data;
 }
+
+export async function getTargetedEmailDeliveryStatuses(request: TargetedEmailRequest): Promise<{ statuses: Record<string, TargetedEmailDeliveryStatus> }> {
+  const { data } = await apiClient.post<{ statuses: Record<string, TargetedEmailDeliveryStatus> }>("/admin/settings/targeted-email/status", request)
+  return data
+}
+
+export async function getTargetedEmailTemplates(): Promise<{ templates: TargetedEmailTemplate[] }> { const { data } = await apiClient.get<{ templates: TargetedEmailTemplate[] }>("/admin/settings/targeted-email/templates"); return data }
+export async function saveTargetedEmailTemplates(templates: TargetedEmailTemplate[]): Promise<void> { await apiClient.put("/admin/settings/targeted-email/templates", { templates }) }
 
 // ==================== Email Template Settings ====================
 
@@ -1589,6 +1601,9 @@ export const settingsAPI = {
   sendTestEmail,
   sendTargetedEmailTest,
   sendTargetedEmailBatch,
+	 getTargetedEmailDeliveryStatuses,
+	 getTargetedEmailTemplates,
+	 saveTargetedEmailTemplates,
   getEmailTemplates,
   getEmailTemplate,
   updateEmailTemplate,
