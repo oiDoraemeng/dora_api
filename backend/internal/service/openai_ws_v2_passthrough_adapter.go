@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/modelresponse"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
 	coderws "github.com/coder/websocket"
@@ -25,6 +26,7 @@ type openAIWSClientFrameConn struct {
 	interTurnIdleTimeout time.Duration
 	interTurnStarted     chan struct{}
 	waitingForNextTurn   atomic.Bool
+	responseModel        atomic.Pointer[string]
 }
 
 // openAIWSPolicyEnforcingFrameConn wraps a client-side FrameConn and runs
@@ -582,6 +584,9 @@ func (c *openAIWSClientFrameConn) WriteFrame(ctx context.Context, msgType coderw
 		ctx = context.Background()
 	}
 	if msgType == coderws.MessageText {
+		if model := c.responseModel.Load(); model != nil {
+			payload = modelresponse.Rewrite(payload, *model)
+		}
 		if normalized, changed := normalizeCompletedImageGenerationStatus(payload); changed {
 			payload = normalized
 		}
@@ -835,6 +840,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		interTurnIdleTimeout: s.openAIWSIngressInterTurnIdleTimeout(),
 		interTurnStarted:     make(chan struct{}, 1),
 	}
+	publicModel := usageMeta.sessionRequestModel
+	clientFrameConn.responseModel.Store(&publicModel)
 	policyClientConn := &openAIWSPolicyEnforcingFrameConn{
 		inner: clientFrameConn,
 		// 注意线程安全：filter 仅在 runClientToUpstream 这一条
@@ -919,6 +926,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			//     service_tier 时按 default 处理，billing 应如实反映。
 			if policyErr == nil && blocked == nil && isResponseCreate {
 				usageMeta.updateFromResponseCreate(out, model, requestModelForThisFrame)
+				// Overlapping turns are rejected above. Atomic publication keeps
+				// the upstream->client writer synchronized with this turn's name.
+				clientFrameConn.responseModel.Store(&requestModelForThisFrame)
 				acceptedTurn = true
 			}
 			return out, blocked, policyErr

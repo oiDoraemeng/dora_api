@@ -443,6 +443,11 @@ func setOpsRequestContext(c *gin.Context, model string, stream bool) {
 		return
 	}
 	model = strings.TrimSpace(model)
+	if model != "" && c.GetString(requestedResponseModelKey) == "" {
+		// Keep the first public model even if a retry or channel mapping later
+		// updates operational metadata in this context.
+		c.Set(requestedResponseModelKey, model)
+	}
 	c.Set(opsModelKey, model)
 	c.Set(opsStreamKey, stream)
 	if c.Request != nil && model != "" {
