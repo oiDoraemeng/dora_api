@@ -311,6 +311,50 @@ func TestPassthroughLifecycle_CompletedTurnStartsInterTurnIdle(t *testing.T) {
 	}
 }
 
+func TestPassthroughLifecycle_ResponseModelTracksEachRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	controlCtx, cancelControl := context.WithCancelCause(context.Background())
+	defer cancelControl(context.Canceled)
+	upstream := newStagedPassthroughConn()
+	cfg := passthroughLifecycleConfig()
+	cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds = 10
+	server, serverErr := startPassthroughLifecycleServer(t, controlCtx, newPassthroughLifecycleService(cfg, upstream), passthroughLifecycleAccount())
+	defer server.Close()
+	clientConn := dialPassthroughLifecycleClient(t, server)
+	defer func() { _ = clientConn.CloseNow() }()
+	requirePassthroughUpstreamWrite(t, upstream, 3*time.Second)
+	upstream.Send(`{"type":"response.completed","response":{"id":"resp_public_1","model":"provider-snapshot","usage":{"input_tokens":1,"output_tokens":1}}}`)
+	event, err := readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "gpt-5.1", gjson.GetBytes(event, "response.model").String())
+
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"grok-4.7"}`))
+	cancelWrite()
+	require.NoError(t, err)
+	requirePassthroughUpstreamWrite(t, upstream, 3*time.Second)
+	upstream.Send(`{"type":"response.completed","response":{"id":"resp_public_2","model":"grok-4.6","usage":{"input_tokens":1,"output_tokens":1}}}`)
+	event, err = readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "grok-4.7", gjson.GetBytes(event, "response.model").String())
+
+	writeCtx, cancelWrite = context.WithTimeout(context.Background(), 3*time.Second)
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create"}`))
+	cancelWrite()
+	require.NoError(t, err)
+	requirePassthroughUpstreamWrite(t, upstream, 3*time.Second)
+	upstream.Send(`{"type":"response.completed","response":{"id":"resp_public_3","model":"provider-snapshot","usage":{"input_tokens":1,"output_tokens":1}}}`)
+	event, err = readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "gpt-5.1", gjson.GetBytes(event, "response.model").String(), "omitted model uses the negotiated session model")
+	_ = clientConn.Close(coderws.StatusNormalClosure, "done")
+	select {
+	case <-serverErr:
+	case <-time.After(3 * time.Second):
+		t.Fatal("passthrough model test did not exit")
+	}
+}
+
 func TestPassthroughLifecycle_ActiveTurnInactivityUsesReadTimeout(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	controlCtx, cancelControl := context.WithCancelCause(context.Background())

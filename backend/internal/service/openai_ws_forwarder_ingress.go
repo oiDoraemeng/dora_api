@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/modelresponse"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
@@ -191,6 +192,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		payloadBytes       int
 	}
 	ingressSessionOriginalModel := ""
+	clientResponseModel := ""
 
 	applyPayloadMutation := func(current []byte, path string, value any) ([]byte, error) {
 		next, err := sjson.SetBytes(current, path, value)
@@ -446,6 +448,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 		normalized = policyApplied
+		if ingressSessionOriginalModel == "" && hooks != nil && strings.TrimSpace(hooks.InitialRequestModel) != "" {
+			// The handler may already have applied channel mapping to the first
+			// frame. Preserve its original client model only for response output.
+			clientResponseModel = strings.TrimSpace(hooks.InitialRequestModel)
+		} else if !modelMissing || clientResponseModel == "" {
+			clientResponseModel = originalModel
+		}
 		ingressSessionOriginalModel = originalModel
 
 		return openAIWSClientPayload{
@@ -464,6 +473,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	writeClientMessage := func(message []byte) error {
 		writeCtx, cancel := newOpenAIWSDownstreamWriteContext(ctx, hooks, s.openAIWSWriteTimeout())
 		defer cancel()
+		message = modelresponse.Rewrite(message, clientResponseModel)
 		message = restoreCodexToolNamesFromContext(c, message)
 		return clientConn.Write(writeCtx, coderws.MessageText, message)
 	}

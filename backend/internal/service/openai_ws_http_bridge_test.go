@@ -1445,6 +1445,7 @@ func TestProxyResponsesWebSocketFromClientForGrokUsesXAIHTTPBridgeAndPreservesMa
 		ginCtx.Set("api_key", &APIKey{ID: 7101})
 
 		errCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "access-token", firstMessage, &OpenAIWSIngressHooks{
+			InitialRequestModel: "grok-4.7",
 			MapRequestModel: func(_ int, originalModel string) (string, error) {
 				if originalModel == "channel-alias" {
 					return "grok-4.3", nil
@@ -1481,6 +1482,8 @@ func TestProxyResponsesWebSocketFromClientForGrokUsesXAIHTTPBridgeAndPreservesMa
 	require.Equal(t, "response.output_text.delta", gjson.GetBytes(delta, "type").String())
 	require.Equal(t, "response.completed", gjson.GetBytes(completed, "type").String())
 	require.Equal(t, "resp_grok_ws_1", gjson.GetBytes(completed, "response.id").String())
+	require.Equal(t, "grok-4.7", gjson.GetBytes(created, "response.model").String())
+	require.Equal(t, "grok-4.7", gjson.GetBytes(completed, "response.model").String())
 
 	writeCtx, cancelWrite = context.WithTimeout(context.Background(), 3*time.Second)
 	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","generate":true,"model":"channel-alias","stream":true,"previous_response_id":"resp_grok_ws_1","input":"second turn"}`))
@@ -1508,6 +1511,7 @@ func TestProxyResponsesWebSocketFromClientForGrokUsesXAIHTTPBridgeAndPreservesMa
 	require.Equal(t, "response.output_text.delta", gjson.GetBytes(delta, "type").String())
 	require.Equal(t, "response.completed", gjson.GetBytes(completed, "type").String())
 	require.Equal(t, "resp_grok_ws_3", gjson.GetBytes(completed, "response.id").String())
+	require.Equal(t, "grok-4.3", gjson.GetBytes(completed, "response.model").String())
 
 	_ = clientConn.Close(coderws.StatusNormalClosure, "done")
 	select {

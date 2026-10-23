@@ -273,7 +273,7 @@ func InboundEndpointMiddleware() gin.HandlerFunc {
 			path = c.FullPath()
 		}
 		c.Set(ctxKeyInboundEndpoint, NormalizeInboundEndpoint(path))
-		c.Next()
+		withRequestedModelResponse(c)
 	}
 }
 

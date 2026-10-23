@@ -52,7 +52,8 @@ func TestAsyncImageHandlerSubmitAndPoll(t *testing.T) {
 	h := &AsyncImageHandler{tasks: tasks}
 	h.execute = func(_ string, c *gin.Context) {
 		<-release
-		c.JSON(http.StatusOK, gin.H{"created": 123, "data": []gin.H{{"url": "https://example.test/image.png"}}})
+		setOpsRequestContext(c, "gpt-image-1", false)
+		c.JSON(http.StatusOK, gin.H{"model": "mapped-image-model", "created": 123, "data": []gin.H{{"url": "https://example.test/image.png"}}})
 	}
 
 	router := gin.New()
@@ -104,6 +105,8 @@ func TestAsyncImageHandlerSubmitAndPoll(t *testing.T) {
 	require.Equal(t, "no-store", pollWriter.Header().Get("Cache-Control"))
 	require.Empty(t, pollWriter.Header().Get("Retry-After"))
 	require.Contains(t, pollWriter.Body.String(), "https://example.test/image.png")
+	require.Contains(t, pollWriter.Body.String(), `"model":"gpt-image-1"`)
+	require.NotContains(t, pollWriter.Body.String(), "mapped-image-model")
 }
 
 // When object storage is not configured the feature is fully disabled: the

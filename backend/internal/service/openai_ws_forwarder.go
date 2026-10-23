@@ -248,8 +248,8 @@ type OpenAIWSIngressHooks struct {
 	// so shutdown and disconnect cancellation remain direct during lease loss.
 	ClientLifecycleContext context.Context
 	// InitialRequestModel is the client-facing model from the first frame,
-	// before channel or account mapping. Ingress modes preserve it for usage
-	// attribution while MapRequestModel determines the upstream model.
+	// before channel or account mapping. Preserve it for response metadata and
+	// request-side usage attribution; MapRequestModel selects the upstream model.
 	InitialRequestModel string
 	// InitialTurnStartedAt freezes when the first response.create was accepted.
 	InitialTurnStartedAt time.Time
