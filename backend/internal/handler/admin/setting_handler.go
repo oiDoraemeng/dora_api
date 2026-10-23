@@ -84,13 +84,14 @@ func (h *SettingHandler) SetNotificationEmailService(notificationEmailService *s
 	h.notificationEmailService = notificationEmailService
 }
 
-	// SetAliyunCaptchaService attaches the Aliyun captcha credential validator without
+// SetAliyunCaptchaService attaches the Aliyun captcha credential validator without
 // changing the constructor signature used by existing unit tests.
 func (h *SettingHandler) SetAliyunCaptchaService(aliyunCaptchaService *service.AliyunCaptchaService) {
 	h.aliyunCaptchaService = aliyunCaptchaService
+}
 
-	func (h *SettingHandler) SetTargetedEmailDeliveryService(targetedEmailDeliveries *service.TargetedEmailDeliveryService) {
-		h.targetedEmailDeliveries = targetedEmailDeliveries
+func (h *SettingHandler) SetTargetedEmailDeliveryService(targetedEmailDeliveries *service.TargetedEmailDeliveryService) {
+	h.targetedEmailDeliveries = targetedEmailDeliveries
 }
 
 // SetStepUpDeps attaches the services backing the step-up switch preconditions
@@ -269,6 +270,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		DefaultBalance:                                         settings.DefaultBalance,
 		RiskControlEnabled:                                     settings.RiskControlEnabled,
 		CyberSessionBlockEnabled:                               settings.CyberSessionBlockEnabled,
+		CyberPolicyUserAllowlist:                               settings.CyberPolicyUserAllowlist,
 		CyberSessionBlockTTLSeconds:                            settings.CyberSessionBlockTTLSeconds,
 		AffiliateRebateRate:                                    settings.AffiliateRebateRate,
 		AffiliateRebateFreezeHours:                             settings.AffiliateRebateFreezeHours,
@@ -292,6 +294,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		MaxClaudeCodeVersion:                                   settings.MaxClaudeCodeVersion,
 		AllowUngroupedKeyScheduling:                            settings.AllowUngroupedKeyScheduling,
 		BackendModeEnabled:                                     settings.BackendModeEnabled,
+		OpenAITTFTMode:                                         settings.OpenAITTFTMode,
 		EnableFingerprintUnification:                           settings.EnableFingerprintUnification,
 		EnableMetadataPassthrough:                              settings.EnableMetadataPassthrough,
 		EnableCCHSigning:                                       settings.EnableCCHSigning,
@@ -306,6 +309,9 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		OpenAICodexClientVersion:                               settings.OpenAICodexClientVersion,
 		OpenAICodexClientVersionSynced:                         settings.OpenAICodexClientVersionSynced,
 		OpenAICodexVersionAutoSyncEnabled:                      settings.OpenAICodexVersionAutoSyncEnabled,
+		ClaudeCodeClientVersion:                                settings.ClaudeCodeClientVersion,
+		ClaudeCodeClientVersionSynced:                          settings.ClaudeCodeClientVersionSynced,
+		ClaudeCodeVersionAutoSyncEnabled:                       settings.ClaudeCodeVersionAutoSyncEnabled,
 		MinCodexVersion:                                        settings.MinCodexVersion,
 		MaxCodexVersion:                                        settings.MaxCodexVersion,
 		CodexCLIOnlyBlacklist:                                  settings.CodexCLIOnlyBlacklist,
@@ -361,6 +367,9 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		PaymentBalanceRechargeMultiplier:                       paymentCfg.BalanceRechargeMultiplier,
 		PaymentSubscriptionUSDToCNYRate:                        paymentCfg.SubscriptionUSDToCNYRate,
 		PaymentRechargeFeeRate:                                 paymentCfg.RechargeFeeRate,
+		PaymentRechargeBonusTiers:                              rechargeBonusTiersToDTO(paymentCfg.RechargeBonusTiers),
+		PaymentRechargeBonusMode:                               rechargeBonusModeToDTO(paymentCfg.RechargeBonusMode),
+		PaymentRechargeBonusNotice:                             paymentCfg.RechargeBonusNotice,
 		PaymentLoadBalanceStrat:                                paymentCfg.LoadBalanceStrategy,
 		PaymentProductNamePrefix:                               paymentCfg.ProductNamePrefix,
 		PaymentProductNameSuffix:                               paymentCfg.ProductNameSuffix,
@@ -379,16 +388,19 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 		ChannelMonitorHideThroughput:         settings.ChannelMonitorHideThroughput,
 		ChannelMonitorShowQuota:              settings.ChannelMonitorShowQuota,
+		ChannelMonitorHideUserRanking:        settings.ChannelMonitorHideUserRanking,
 
 		GrokDefaultTextModel:           settings.GrokDefaultTextModel,
 		GrokCrossClientModelMapEnabled: settings.GrokCrossClientModelMapEnabled,
 		GrokDefaultBaseURLMode:         settings.GrokDefaultBaseURLMode,
 
 		AvailableChannelsEnabled: settings.AvailableChannelsEnabled,
+		SubscriptionEnabled:      settings.SubscriptionEnabled,
 
-		ModelPlazaEnabled:     settings.ModelPlazaEnabled,
-		ModelPlazaRequireAuth: settings.ModelPlazaRequireAuth,
-		ModelPlazaDescription: settings.ModelPlazaDescription,
+		ModelPlazaEnabled:       settings.ModelPlazaEnabled,
+		ModelPlazaRequireAuth:   settings.ModelPlazaRequireAuth,
+		PluginManagementEnabled: settings.PluginManagementEnabled,
+		ModelPlazaDescription:   settings.ModelPlazaDescription,
 
 		AffiliateEnabled: settings.AffiliateEnabled,
 
