@@ -240,7 +240,7 @@ func TestGeminiV1BetaGetModel_CompositeAntigravityRoute(t *testing.T) {
 
 		(&GatewayHandler{}).GeminiV1BetaGetModel(c)
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-		require.Contains(t, rec.Body.String(), "models/gemini-4-argon-high")
+		require.Contains(t, rec.Body.String(), "models/gemini-4-argon")
 	})
 
 	t.Run("composite route to antigravity claude model is rejected on v1beta", func(t *testing.T) {

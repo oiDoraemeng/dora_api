@@ -81,6 +81,15 @@ func TestGrokRealtimeEventHasAudio(t *testing.T) {
 	require.True(t, grokRealtimeEventHasAudio([]byte(`{"type":"response.output_audio.delta","audio":"abc"}`)))
 }
 
+func TestRewriteGrokRealtimeResponseModel(t *testing.T) {
+	require.JSONEq(t,
+		`{"type":"session.created","session":{"model":"grok-4.7"}}`,
+		string(rewriteGrokRealtimeResponseModel([]byte(`{"type":"session.created","session":{"model":"grok-4.6"}}`), "grok-4.7")),
+	)
+	errorEvent := []byte(`{"type":"error","model":"grok-4.6","error":{"message":"rejected"}}`)
+	require.Equal(t, string(errorEvent), string(rewriteGrokRealtimeResponseModel(errorEvent, "grok-4.7")))
+}
+
 func TestForwardGrokVoice_RejectsUnknownEndpoint(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	_, err := svc.ForwardGrokVoice(context.Background(), nil, &Account{Platform: PlatformGrok}, "unknown", []byte(`{}`), "application/json")

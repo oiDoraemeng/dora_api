@@ -203,6 +203,9 @@ func (h *AsyncImageHandler) validateRequest(c *gin.Context, platform string, bod
 	if err != nil {
 		return err
 	}
+	if err := requireExplicitImagesModel(parsed); err != nil {
+		return err
+	}
 	if parsed.Stream {
 		return errors.New("streaming image requests cannot be submitted as asynchronous tasks")
 	}

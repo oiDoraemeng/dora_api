@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +21,41 @@ type requestedModelTestUpstream struct {
 	t             *testing.T
 	stream        bool
 	upstreamModel string
+}
+
+func TestRequestedModelResponsePrefersCompositePublicModelAcrossFamilies(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		family, requested, upstream, platform string
+	}{
+		{"openai", "gpt-public", "gpt-5.4", service.PlatformOpenAI},
+		{"claude", "claude-public", "claude-sonnet-4", service.PlatformAnthropic},
+		{"gemini", "gemini-public", "gemini-2.5-pro", service.PlatformGemini},
+		{"grok", "grok-public", "grok-4.6", service.PlatformGrok},
+		{"deepseek", "deepseek-public", "deepseek-v3", service.PlatformDeepseek},
+		{"glm", "glm-public", "glm-4.7", service.PlatformZhipu},
+		{"kimi", "kimi-public", "kimi-k2", service.PlatformKimi},
+	} {
+		t.Run(tc.family, func(t *testing.T) {
+			router := gin.New()
+			router.Use(InboundEndpointMiddleware())
+			router.POST("/v1/responses", func(c *gin.Context) {
+				setOpsRequestContext(c, tc.upstream, false)
+				require.Equal(t, tc.upstream, c.GetString(opsModelKey))
+				c.JSON(http.StatusOK, gin.H{"model": tc.upstream, "output": []any{}})
+			})
+			decision := service.CompositeRouteDecision{
+				Matched: true, PublicModel: tc.requested, UpstreamModel: tc.upstream, TargetPlatform: tc.platform,
+			}
+			request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			request = request.WithContext(service.WithCompositeRouteDecision(context.Background(), decision))
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+
+			require.Equal(t, http.StatusOK, recorder.Code)
+			require.Equal(t, tc.requested, gjson.Get(recorder.Body.String(), "model").String())
+		})
+	}
 }
 
 func (u *requestedModelTestUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {

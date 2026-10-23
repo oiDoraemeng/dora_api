@@ -116,6 +116,10 @@ func ValidateLiveCallRequest(request *LiveCallRequest) error {
 	if sessionObject == nil {
 		return errors.New("session must be a JSON object")
 	}
+	var model string
+	if rawModel, exists := sessionObject["model"]; !exists || json.Unmarshal(rawModel, &model) != nil || strings.TrimSpace(model) == "" {
+		return errors.New("session.model is required")
+	}
 	return nil
 }
 

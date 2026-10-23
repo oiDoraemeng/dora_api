@@ -94,6 +94,20 @@ func TestValidateLiveCallRequestDoesNotRequireDelegation(t *testing.T) {
 	require.NotContains(t, string(request.Session), "delegation")
 }
 
+func TestValidateLiveCallRequestRequiresModel(t *testing.T) {
+	for _, session := range []string{
+		`{"instructions":"hello"}`,
+		`{"model":"  "}`,
+		`{"model":null}`,
+		`{"model":{"name":"gpt-live-test"}}`,
+	} {
+		t.Run(session, func(t *testing.T) {
+			err := ValidateLiveCallRequest(&LiveCallRequest{SDP: "v=0\r\n", Session: json.RawMessage(session)})
+			require.EqualError(t, err, "session.model is required")
+		})
+	}
+}
+
 func TestCreateUpstreamLiveCallPreservesSession(t *testing.T) {
 	upstream := &liveHTTPUpstreamStub{}
 	service := &OpenAIGatewayService{

@@ -24,6 +24,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
 )
 
@@ -234,17 +236,18 @@ func (h *GatewayHandler) GeminiV1BetaGetModel(c *gin.Context) {
 		return
 	}
 
-	modelName := strings.TrimSpace(c.Param("model"))
-	if modelName == "" {
+	requestedModelName := strings.TrimSpace(c.Param("model"))
+	if requestedModelName == "" {
 		googleError(c, http.StatusBadRequest, "Missing model in URL")
 		return
 	}
 	// 模型名会被拼进上游 URL 的 path，先在入口校验片段合规性，
 	// 见 service/upstream_path_guard.go。
-	if !service.IsSafeGeminiModelPathSegment(modelName) {
+	if !service.IsSafeGeminiModelPathSegment(requestedModelName) {
 		googleError(c, http.StatusBadRequest, "Invalid model in URL")
 		return
 	}
+	modelName := requestedModelName
 	if resolvedModel, ok := service.ResolvedUpstreamModelFromContext(c.Request.Context()); ok && strings.TrimSpace(resolvedModel) != "" {
 		modelName = strings.TrimSpace(resolvedModel)
 	}
@@ -255,7 +258,7 @@ func (h *GatewayHandler) GeminiV1BetaGetModel(c *gin.Context) {
 
 	// 强制 antigravity 模式或 composite 路由到 antigravity：返回 antigravity 模型信息
 	if forcePlatform == service.PlatformAntigravity || effectivePlatform == service.PlatformAntigravity {
-		c.JSON(http.StatusOK, antigravity.FallbackGeminiModel(modelName))
+		c.JSON(http.StatusOK, antigravity.FallbackGeminiModel(requestedModelName))
 		return
 	}
 
@@ -265,7 +268,7 @@ func (h *GatewayHandler) GeminiV1BetaGetModel(c *gin.Context) {
 		hasAntigravity, _ := h.geminiCompatService.HasAntigravityAccounts(c.Request.Context(), apiKey.GroupID)
 		if hasAntigravity {
 			// antigravity 账户使用静态模型信息
-			c.JSON(http.StatusOK, gemini.FallbackModel(modelName))
+			c.JSON(http.StatusOK, gemini.FallbackModel(requestedModelName))
 			return
 		}
 		markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
@@ -279,10 +282,29 @@ func (h *GatewayHandler) GeminiV1BetaGetModel(c *gin.Context) {
 		return
 	}
 	if shouldFallbackGeminiModel(modelName, res) {
-		c.JSON(http.StatusOK, gemini.FallbackModel(modelName))
+		c.JSON(http.StatusOK, gemini.FallbackModel(requestedModelName))
 		return
 	}
+	if res != nil && res.StatusCode >= http.StatusOK && res.StatusCode < http.StatusMultipleChoices {
+		res.Body = rewriteGeminiModelDetailResponse(res.Body, requestedModelName)
+	}
 	writeUpstreamResponse(c, res)
+}
+
+func rewriteGeminiModelDetailResponse(body []byte, requestedModel string) []byte {
+	requestedModel = strings.TrimSpace(requestedModel)
+	name := gjson.GetBytes(body, "name")
+	if requestedModel == "" || name.Type != gjson.String {
+		return body
+	}
+	if !strings.HasPrefix(requestedModel, "models/") {
+		requestedModel = "models/" + requestedModel
+	}
+	updated, err := sjson.SetBytes(body, "name", requestedModel)
+	if err != nil {
+		return body
+	}
+	return updated
 }
 
 // GeminiV1BetaModels proxies Gemini native REST endpoints like:

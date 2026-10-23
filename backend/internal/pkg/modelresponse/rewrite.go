@@ -32,10 +32,14 @@ func Rewrite(payload []byte, requestedModel string) []byte {
 		}
 		return payload
 	}
-	if !root.IsObject() || root.Get("error").Exists() || root.Get("type").String() == "error" {
+	if !root.IsObject() {
 		return payload
 	}
-	for _, path := range []string{"model", "response.model", "message.model", "modelVersion", "response.modelVersion"} {
+	errorValue := root.Get("error")
+	if (errorValue.Exists() && errorValue.Type != gjson.Null) || root.Get("type").String() == "error" {
+		return payload
+	}
+	for _, path := range []string{"model", "response.model", "message.model", "session.model", "modelVersion", "response.modelVersion"} {
 		value := gjson.GetBytes(payload, path)
 		if value.Type != gjson.String || value.String() == requestedModel {
 			continue

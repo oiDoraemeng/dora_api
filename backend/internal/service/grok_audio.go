@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/modelresponse"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -135,7 +136,7 @@ func (s *OpenAIGatewayService) ProxyGrokRealtime(ctx context.Context, c *gin.Con
 		return false, err
 	}
 	defer func() { _ = upstream.Close() }()
-	return s.ProxyGrokRealtimeConn(ctx, c, client, upstream)
+	return s.ProxyGrokRealtimeConn(ctx, c, client, upstream, model)
 }
 
 type GrokRealtimeUpstream struct{ conn openAIWSClientConn }
@@ -198,7 +199,7 @@ func (s *OpenAIGatewayService) HandleGrokRealtimeUpstreamError(ctx context.Conte
 	s.handleGrokAccountUpstreamError(ctx, account, statusCode, nil, body)
 }
 
-func (s *OpenAIGatewayService) ProxyGrokRealtimeConn(ctx context.Context, c *gin.Context, client *coderws.Conn, upstream *GrokRealtimeUpstream) (bool, error) {
+func (s *OpenAIGatewayService) ProxyGrokRealtimeConn(ctx context.Context, c *gin.Context, client *coderws.Conn, upstream *GrokRealtimeUpstream, requestedModel string) (bool, error) {
 	if s == nil || client == nil || upstream == nil || upstream.conn == nil {
 		return false, fmt.Errorf("realtime connection is required")
 	}
@@ -208,6 +209,7 @@ func (s *OpenAIGatewayService) ProxyGrokRealtimeConn(ctx context.Context, c *gin
 	defer cancel()
 	errCh := make(chan error, 2)
 	var audioObserved atomic.Bool
+	requestedModel = strings.TrimSpace(requestedModel)
 
 	// Upstream → client
 	go func() {
@@ -220,6 +222,7 @@ func (s *OpenAIGatewayService) ProxyGrokRealtimeConn(ctx context.Context, c *gin
 			if grokRealtimeEventHasAudio(msg) {
 				audioObserved.Store(true)
 			}
+			msg = rewriteGrokRealtimeResponseModel(msg, requestedModel)
 			if writeErr := client.Write(ctx, coderws.MessageText, msg); writeErr != nil {
 				errCh <- writeErr
 				return
@@ -254,6 +257,10 @@ func (s *OpenAIGatewayService) ProxyGrokRealtimeConn(ctx context.Context, c *gin
 	}()
 
 	return awaitGrokRealtimeAudioObserved(errCh, &audioObserved)
+}
+
+func rewriteGrokRealtimeResponseModel(payload []byte, requestedModel string) []byte {
+	return modelresponse.Rewrite(payload, strings.TrimSpace(requestedModel))
 }
 
 // ProbeGrokRealtime performs the upstream WebSocket handshake without sending

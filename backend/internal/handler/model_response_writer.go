@@ -15,7 +15,8 @@ const requestedResponseModelKey = "_gateway_requested_response_model"
 // requestedModelWriter is installed at the shared gateway boundary, covering
 // raw passthroughs, protocol conversions and channel/account mapping alike.
 // It never reads the request body, so multipart and native Gemini routes keep
-// their normal parsing. The handler records the public name before mapping.
+// their normal parsing. Composite routing stores the public name in request
+// context before rewriting, while handlers capture it before local mappings.
 type requestedModelWriter struct {
 	gin.ResponseWriter
 	c       *gin.Context
