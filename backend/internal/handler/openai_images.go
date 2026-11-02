@@ -94,6 +94,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		zap.String("routing_model", routingModel),
 		zap.Bool("stream", parsed.Stream),
 		zap.Bool("multipart", parsed.Multipart),
+		zap.String("generation_backend", string(parsed.GenerationBackend)),
 		zap.String("capability", string(parsed.RequiredCapability)),
 		zap.String("img_quality", parsed.Quality),
 		zap.String("img_size", parsed.Size),

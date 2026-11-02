@@ -3625,11 +3625,11 @@ func TestReplaceModelInResponseBody(t *testing.T) {
 			expected: `{"id":"resp_123","model":"gpt-5.4","output":[]}`,
 		},
 		{
-			name:     "不替换非日期后缀 model",
+			name:     "始终替换为请求 model",
 			body:     `{"id":"resp_123","model":"gpt-5.4-mini-high","output":[]}`,
 			from:     "gpt-5.4-mini",
 			to:       "gpt-5.4",
-			expected: `{"id":"resp_123","model":"gpt-5.4-mini-high","output":[]}`,
+			expected: `{"id":"resp_123","model":"gpt-5.4","output":[]}`,
 		},
 	}
 

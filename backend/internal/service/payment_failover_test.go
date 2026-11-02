@@ -209,6 +209,7 @@ func TestInvokeProviderCandidatesFallsBackToEasyPayBackupAndUpdatesSnapshot(t *t
 		10,
 		0,
 		10,
+		0,
 		primary,
 	)
 	require.NoError(t, err)

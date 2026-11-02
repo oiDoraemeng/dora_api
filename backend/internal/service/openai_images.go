@@ -39,7 +39,7 @@ const (
 	openAIChatGPTFilesURL                  = "https://chatgpt.com/backend-api/files"
 	openAIImageBackendUserAgent            = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 	openAIImageMaxDownloadBytes            = 20 << 20 // 20MB per image download
-	openAIImageMaxUploadPartSize           = 20 << 20 // 20MB per multipart upload part
+	openAIImageMaxUploadPartSize           = 50 << 20 // OpenAI's documented per-image limit for GPT image edits
 	openAIImagesResponsesMainModel         = "gpt-5.6-luna"
 	openAIImagesVerbatimPromptInstructions = "When invoking the image_generation tool, use the user's image prompt verbatim. Do not rewrite, expand, summarize, embellish, translate, normalize punctuation, or add or remove visual details or constraints. Preserve the original language, wording, capitalization, quotes, and punctuation exactly."
 )
@@ -57,10 +57,18 @@ func openAIImagesResponsesMainModelValue() string {
 type OpenAIImagesCapability string
 
 const (
-	OpenAIImagesCapabilityBasic  OpenAIImagesCapability = "images-basic"
-	OpenAIImagesCapabilityNative OpenAIImagesCapability = "images-native"
+	OpenAIImagesCapabilityBasic      OpenAIImagesCapability = "images-basic"
+	OpenAIImagesCapabilityNative     OpenAIImagesCapability = "images-native"
+	OpenAIImagesCapabilityChatGPTWeb OpenAIImagesCapability = "images-chatgpt-web"
 	// Compatible provider models require the API-key Images passthrough path.
 	OpenAIImagesCapabilityAPIKey OpenAIImagesCapability = "images-apikey"
+)
+
+type OpenAIImagesGenerationBackend string
+
+const (
+	OpenAIImagesGenerationBackendOpenAIImages OpenAIImagesGenerationBackend = "openai_images"
+	OpenAIImagesGenerationBackendChatGPTWeb   OpenAIImagesGenerationBackend = "chatgpt_web"
 )
 
 type OpenAIImagesUpload struct {
@@ -95,6 +103,7 @@ type OpenAIImagesRequest struct {
 	PartialImages      *int
 	HasMask            bool
 	HasNativeOptions   bool
+	GenerationBackend  OpenAIImagesGenerationBackend
 	RequiredCapability OpenAIImagesCapability
 	InputImageURLs     []string
 	MaskImageURL       string
@@ -257,6 +266,7 @@ func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
 		}
 		req.Stream = streamResult.Bool()
 	}
+	req.GenerationBackend = parseOpenAIImagesGenerationBackendFromJSON(body)
 
 	if nResult := gjson.GetBytes(body, "n"); nResult.Exists() {
 		if nResult.Type != gjson.Number {
@@ -352,10 +362,15 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 			continue
 		}
 
-		data, err := io.ReadAll(io.LimitReader(part, openAIImageMaxUploadPartSize))
+		// Read one byte past the limit so an oversized part is rejected instead of
+		// being cut short and forwarded upstream as a corrupt image.
+		data, err := io.ReadAll(io.LimitReader(part, openAIImageMaxUploadPartSize+1))
 		_ = part.Close()
 		if err != nil {
 			return fmt.Errorf("read multipart field %s: %w", name, err)
+		}
+		if len(data) > openAIImageMaxUploadPartSize {
+			return fmt.Errorf("multipart field %q exceeds the %d MB per-part limit", name, openAIImageMaxUploadPartSize>>20)
 		}
 
 		fileName := strings.TrimSpace(part.FileName())
@@ -444,6 +459,8 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 			}
 			req.PartialImages = &n
 			req.HasNativeOptions = true
+		case "generation_backend", "generation_method", "image_backend":
+			req.GenerationBackend = normalizeOpenAIImagesGenerationBackend(value)
 		default:
 			if isOpenAINativeImageOption(name) && value != "" {
 				req.HasNativeOptions = true
@@ -470,9 +487,12 @@ func applyOpenAIImagesDefaults(req *OpenAIImagesRequest) {
 	}
 	if strings.TrimSpace(req.Model) != "" {
 		req.Model = strings.TrimSpace(req.Model)
-		return
+	} else {
+		req.Model = "gpt-image-2"
 	}
-	req.Model = "gpt-image-2"
+	if req.GenerationBackend == "" {
+		req.GenerationBackend = OpenAIImagesGenerationBackendOpenAIImages
+	}
 }
 
 func isOpenAIImageGenerationModel(model string) bool {
@@ -543,6 +563,9 @@ func classifyOpenAIImagesCapability(req *OpenAIImagesRequest) OpenAIImagesCapabi
 	if req == nil {
 		return OpenAIImagesCapabilityNative
 	}
+	if req.GenerationBackend == OpenAIImagesGenerationBackendChatGPTWeb {
+		return OpenAIImagesCapabilityChatGPTWeb
+	}
 	if isGeminiCompatibleImageModel(req.Model) {
 		return OpenAIImagesCapabilityAPIKey
 	}
@@ -563,6 +586,25 @@ func classifyOpenAIImagesCapability(req *OpenAIImagesRequest) OpenAIImagesCapabi
 		return OpenAIImagesCapabilityNative
 	}
 	return OpenAIImagesCapabilityBasic
+}
+
+func parseOpenAIImagesGenerationBackendFromJSON(body []byte) OpenAIImagesGenerationBackend {
+	for _, path := range []string{"generation_backend", "generation_method", "image_backend"} {
+		if value := strings.TrimSpace(gjson.GetBytes(body, path).String()); value != "" {
+			return normalizeOpenAIImagesGenerationBackend(value)
+		}
+	}
+	return ""
+}
+
+func normalizeOpenAIImagesGenerationBackend(value string) OpenAIImagesGenerationBackend {
+	normalized := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value)), "-", "_")
+	switch normalized {
+	case "chatgpt2api", "chatgpt_web", "chatgpt", "web", "picture_v2":
+		return OpenAIImagesGenerationBackendChatGPTWeb
+	default:
+		return OpenAIImagesGenerationBackendOpenAIImages
+	}
 }
 
 func hasOpenAINativeImageOptions(exists func(path string) bool) bool {
@@ -611,6 +653,9 @@ func (s *OpenAIGatewayService) ForwardImages(
 	case AccountTypeAPIKey:
 		return s.forwardOpenAIImagesAPIKey(ctx, c, account, body, parsed, channelMappedModel)
 	case AccountTypeOAuth, AccountTypeSetupToken:
+		if parsed.GenerationBackend == OpenAIImagesGenerationBackendChatGPTWeb {
+			return s.forwardOpenAIImagesOAuthChatGPTWeb(ctx, c, account, parsed, channelMappedModel)
+		}
 		return s.forwardOpenAIImagesOAuth(ctx, c, account, parsed, channelMappedModel)
 	default:
 		return nil, fmt.Errorf("unsupported account type: %s", account.Type)
@@ -741,7 +786,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	defer func() { _ = resp.Body.Close() }()
 
 	var usage OpenAIUsage
-	imageCount := parsed.N
+	var imageCount int
 	var firstTokenMs *int
 	if parsed.Stream && isEventStreamResponse(resp.Header) {
 		streamUsage, streamCount, streamSizes, ttft, err := s.handleOpenAIImagesStreamingResponse(resp, c, startTime, nil)
@@ -757,6 +802,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 					ResponseHeaders:  resp.Header.Clone(),
 					Duration:         time.Since(startTime),
 					FirstTokenMs:     ttft,
+					ImageEndpoint:    true,
 					ImageCount:       streamCount,
 					ImageSize:        parsed.SizeTier,
 					ImageInputSize:   parsed.Size,
@@ -766,7 +812,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 			return nil, err
 		}
 		usage = streamUsage
-		imageCount = streamCount
+		imageCount = resolveBillableImageCount(streamCount, 0, imageCountBillingEnabled(getAPIKeyFromContext(c)))
 		imageOutputSizes := streamSizes
 		firstTokenMs = ttft
 		return &OpenAIForwardResult{
@@ -779,6 +825,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 			ResponseHeaders:  resp.Header.Clone(),
 			Duration:         time.Since(startTime),
 			FirstTokenMs:     firstTokenMs,
+			ImageEndpoint:    true,
 			ImageCount:       imageCount,
 			ImageSize:        parsed.SizeTier,
 			ImageInputSize:   parsed.Size,
@@ -790,9 +837,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 			return nil, err
 		}
 		usage = nonStreamUsage
-		if nonStreamCount > 0 {
-			imageCount = nonStreamCount
-		}
+		imageCount = resolveBillableImageCount(nonStreamCount, parsed.N, imageCountBillingEnabled(getAPIKeyFromContext(c)))
 		return &OpenAIForwardResult{
 			RequestID:        resp.Header.Get("x-request-id"),
 			UpstreamHeaders:  resp.Header,
@@ -803,6 +848,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 			ResponseHeaders:  resp.Header.Clone(),
 			Duration:         time.Since(startTime),
 			FirstTokenMs:     firstTokenMs,
+			ImageEndpoint:    true,
 			ImageCount:       imageCount,
 			ImageSize:        parsed.SizeTier,
 			ImageInputSize:   parsed.Size,
@@ -873,17 +919,22 @@ func buildOpenAIImagesURL(base string, endpoint string) string {
 
 func rewriteOpenAIImagesModel(body []byte, contentType string, model string) ([]byte, string, error) {
 	model = strings.TrimSpace(model)
-	if model == "" {
-		return body, contentType, nil
-	}
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err == nil && strings.EqualFold(mediaType, "multipart/form-data") {
 		rewrittenBody, rewrittenType, rewriteErr := rewriteOpenAIImagesMultipartModel(body, contentType, model)
 		return rewrittenBody, rewrittenType, rewriteErr
 	}
-	rewritten, err := sjson.SetBytes(body, "model", model)
-	if err != nil {
-		return nil, "", fmt.Errorf("rewrite image request model: %w", err)
+	rewritten := body
+	if model != "" {
+		rewritten, err = sjson.SetBytes(rewritten, "model", model)
+		if err != nil {
+			return nil, "", fmt.Errorf("rewrite image request model: %w", err)
+		}
+	}
+	for _, path := range []string{"generation_backend", "generation_method", "image_backend"} {
+		if gjson.GetBytes(rewritten, path).Exists() {
+			rewritten, _ = sjson.DeleteBytes(rewritten, path)
+		}
 	}
 	return rewritten, contentType, nil
 }
@@ -914,6 +965,10 @@ func rewriteOpenAIImagesMultipartModel(body []byte, contentType string, model st
 
 		formName := strings.TrimSpace(part.FormName())
 		partHeader := cloneMultipartHeader(part.Header)
+		if part.FileName() == "" && isOpenAIImagesLocalOnlyField(formName) {
+			_ = part.Close()
+			continue
+		}
 		target, err := writer.CreatePart(partHeader)
 		if err != nil {
 			_ = part.Close()
@@ -945,6 +1000,15 @@ func rewriteOpenAIImagesMultipartModel(body []byte, contentType string, model st
 		return nil, "", fmt.Errorf("finalize multipart body: %w", err)
 	}
 	return buffer.Bytes(), writer.FormDataContentType(), nil
+}
+
+func isOpenAIImagesLocalOnlyField(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "generation_backend", "generation_method", "image_backend":
+		return true
+	default:
+		return false
+	}
 }
 
 func cloneMultipartHeader(src textproto.MIMEHeader) textproto.MIMEHeader {

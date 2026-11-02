@@ -1353,7 +1353,7 @@ func TestOpenAIGatewayServiceForwardImages_OAuthChatGPTWebFileDownload404UsesAtt
 	require.Equal(t, "image", upstream.requests[6].Header.Get("Sec-Fetch-Dest"))
 }
 
-func TestOpenAIGatewayServiceForwardImages_OAuthResponsesToolChoiceErrorFallsBackToChatGPTWeb(t *testing.T) {
+func TestOpenAIGatewayServiceForwardImages_OAuthToolChoiceErrorFallsBackToChatGPTWeb(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","size":"1024x1024","response_format":"b64_json"}`)
 
@@ -1431,7 +1431,7 @@ func TestOpenAIGatewayServiceForwardImages_OAuthResponsesToolChoiceErrorFallsBac
 	require.Equal(t, base64.StdEncoding.EncodeToString([]byte("PNGDATA")), gjson.Get(rec.Body.String(), "data.0.b64_json").String())
 
 	require.Len(t, upstream.requests, 7)
-	require.Contains(t, upstream.requests[0].URL.String(), "/responses")
+	require.Contains(t, upstream.requests[0].URL.String(), "/codex/images/generations")
 	require.Equal(t, "https://chatgpt.com/", upstream.requests[1].URL.String())
 	require.Equal(t, openAIChatGPTWebChatRequirementsURL, upstream.requests[2].URL.String())
 	require.Equal(t, openAIChatGPTWebPrepareURL, upstream.requests[3].URL.String())

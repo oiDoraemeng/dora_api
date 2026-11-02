@@ -1464,7 +1464,7 @@ describe("admin SettingsView payment visible method controls", () => {
     );
   });
 
-  it("rejects popup EasyPay instances in failover mode", async () => {
+  it("allows popup EasyPay instances in failover mode", async () => {
     const primary = {
       id: 1,
       provider_key: "easypay",
@@ -1526,8 +1526,7 @@ describe("admin SettingsView payment visible method controls", () => {
     await wrapper.get(".enable-popup-easypay-backup").trigger("click");
     await flushPromises();
 
-    expect(showError).toHaveBeenCalled();
-    expect(updateProvider).not.toHaveBeenCalled();
+    expect(updateProvider).toHaveBeenCalledWith(2, { enabled: true });
   });
 
   it("renders advanced scheduler copy as local experimental gateway policy", async () => {

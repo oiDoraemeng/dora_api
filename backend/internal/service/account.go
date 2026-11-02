@@ -2113,6 +2113,8 @@ func (a *Account) SupportsOpenAIImageCapability(capability OpenAIImagesCapabilit
 		return a.Type == AccountTypeAPIKey
 	case OpenAIImagesCapabilityBasic, OpenAIImagesCapabilityNative:
 		return a.Type == AccountTypeOAuth || a.Type == AccountTypeSetupToken || a.Type == AccountTypeAPIKey
+	case OpenAIImagesCapabilityChatGPTWeb:
+		return a.Type == AccountTypeOAuth || a.Type == AccountTypeSetupToken
 	default:
 		return true
 	}
