@@ -408,6 +408,23 @@ func TestUsageLogRepositoryListWithFiltersRequestTypePriority(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestUsageLogRepositoryUserPreviewSkipsCount(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+	// No COUNT expectation: a preview must go directly to the lookahead query.
+	mock.ExpectQuery("SELECT .* FROM usage_logs WHERE user_id = \\$1 ORDER BY id DESC LIMIT \\$2 OFFSET \\$3").
+		WithArgs(int64(42), 6, 0).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	logs, page, err := repo.ListWithFilters(context.Background(), pagination.PaginationParams{Page: 1, PageSize: 5}, usagestats.UsageLogFilters{UserID: 42, SkipTotal: true})
+	require.NoError(t, err)
+	require.Empty(t, logs)
+	require.Zero(t, page.Total)
+	require.NoError(t, mock.ExpectationsWereMet())
+	// Ordinary user pagination keeps its exact total, and ExactTotal wins.
+	require.False(t, shouldUseFastUsageLogTotal(usagestats.UsageLogFilters{UserID: 42}))
+	require.False(t, shouldUseFastUsageLogTotal(usagestats.UsageLogFilters{UserID: 42, ExactTotal: true, SkipTotal: true}))
+}
+
 func TestUsageLogRepositoryListWithFiltersNativeCompactionV2(t *testing.T) {
 	db, mock := newSQLMock(t)
 	repo := &usageLogRepository{sql: db}

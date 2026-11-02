@@ -213,13 +213,13 @@
               <div class="flex items-center gap-1.5">
                 <span class="text-gray-500 dark:text-gray-400">{{ t('keys.today') }}:</span>
                 <span class="font-medium text-gray-900 dark:text-white">
-                  ${{ (usageStats[row.id]?.today_actual_cost ?? 0).toFixed(4) }}
+                  {{ usageStats[row.id] ? '$' + usageStats[row.id].today_actual_cost.toFixed(4) : '—' }}
                 </span>
               </div>
               <div class="mt-0.5 flex items-center gap-1.5">
                 <span class="text-gray-500 dark:text-gray-400">{{ t('keys.total') }}:</span>
                 <span class="font-medium text-gray-900 dark:text-white">
-                  ${{ (usageStats[row.id]?.total_actual_cost ?? 0).toFixed(4) }}
+                  {{ usageStats[row.id] ? '$' + usageStats[row.id].total_actual_cost.toFixed(4) : '—' }}
                 </span>
               </div>
               <!-- Quota progress (if quota is set) -->
@@ -1613,18 +1613,12 @@ const loadApiKeys = async () => {
     pagination.value.total = response.total
     pagination.value.pages = response.pages
 
-    // Load usage stats for all API keys in the list
+    // Cost aggregation must not hold the key table's loading state open.
+    usageStats.value = {}
     if (response.items.length > 0) {
-      const keyIds = response.items.map((k) => k.id)
-      try {
-        const usageResponse = await usageAPI.getDashboardApiKeysUsage(keyIds, { signal })
-        if (signal.aborted) return
-        usageStats.value = usageResponse.stats
-      } catch (e) {
-        if (!isAbortError(e)) {
-          console.error('Failed to load usage stats:', e)
-        }
-      }
+      void usageAPI.getDashboardApiKeysUsage(response.items.map((key) => key.id), { signal })
+        .then((result) => { if (!signal.aborted) usageStats.value = result.stats })
+        .catch((error) => { if (!isAbortError(error)) console.error('Failed to load usage stats:', error) })
     }
   } catch (error) {
     if (isAbortError(error)) {

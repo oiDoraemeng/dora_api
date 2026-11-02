@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -60,6 +62,7 @@ type UsageService struct {
 	userRepo             UserRepository
 	entClient            *dbent.Client
 	authCacheInvalidator APIKeyAuthCacheInvalidator
+	queryCache           *usageQueryCache
 }
 
 // NewUsageService 创建使用统计服务实例
@@ -69,7 +72,17 @@ func NewUsageService(usageRepo UsageLogRepository, userRepo UserRepository, entC
 		userRepo:             userRepo,
 		entClient:            entClient,
 		authCacheInvalidator: authCacheInvalidator,
+		queryCache:           newUsageQueryCache(),
 	}
+}
+
+func usageQueryCacheKey(name string, value any) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		// An unencodable filter must bypass caching, never share a fallback key.
+		return ""
+	}
+	return name + ":" + string(data)
 }
 
 // Create 创建使用日志
@@ -291,7 +304,10 @@ func (s *UsageService) Delete(ctx context.Context, id int64) error {
 
 // GetUserDashboardStats returns per-user dashboard summary stats.
 func (s *UsageService) GetUserDashboardStats(ctx context.Context, userID int64) (*usagestats.UserDashboardStats, error) {
-	stats, err := s.usageRepo.GetUserDashboardStats(ctx, userID)
+	stats := &usagestats.UserDashboardStats{}
+	err := s.queryCache.load(ctx, usageQueryCacheKey("dashboard", userID), stats, func(loadCtx context.Context) (any, error) {
+		return s.usageRepo.GetUserDashboardStats(loadCtx, userID)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("get user dashboard stats: %w", err)
 	}
@@ -318,6 +334,25 @@ func (s *UsageService) GetUserUsageTrendByUserID(ctx context.Context, userID int
 
 // GetUsageTrendWithFilters returns trend data using the shared usage filter shape.
 func (s *UsageService) GetUsageTrendWithFilters(ctx context.Context, startTime, endTime time.Time, granularity string, filters usagestats.UsageLogFilters) ([]usagestats.TrendDataPoint, error) {
+	if filters.UserID != 0 {
+		var trend []usagestats.TrendDataPoint
+		key := usageQueryCacheKey("trend", struct {
+			Start, End  time.Time
+			Granularity string
+			Filters     usagestats.UsageLogFilters
+		}{startTime, endTime, granularity, filters})
+		err := s.queryCache.load(ctx, key, &trend, func(loadCtx context.Context) (any, error) {
+			return s.getUsageTrendWithFilters(loadCtx, startTime, endTime, granularity, filters)
+		})
+		if err != nil {
+			return nil, fmt.Errorf("get usage trend with filters: %w", err)
+		}
+		return trend, nil
+	}
+	return s.getUsageTrendWithFilters(ctx, startTime, endTime, granularity, filters)
+}
+
+func (s *UsageService) getUsageTrendWithFilters(ctx context.Context, startTime, endTime time.Time, granularity string, filters usagestats.UsageLogFilters) ([]usagestats.TrendDataPoint, error) {
 	type usageTrendWithFiltersRepo interface {
 		GetUsageTrendWithUsageFilters(ctx context.Context, startTime, endTime time.Time, granularity string, filters usagestats.UsageLogFilters) ([]usagestats.TrendDataPoint, error)
 	}
@@ -347,6 +382,25 @@ func (s *UsageService) GetUserModelStats(ctx context.Context, userID int64, star
 // GetModelStatsWithFiltersBySource returns model stats using the shared usage filter shape.
 func (s *UsageService) GetModelStatsWithFiltersBySource(ctx context.Context, startTime, endTime time.Time, filters usagestats.UsageLogFilters, modelSource string) ([]usagestats.ModelStat, error) {
 	normalizedSource := usagestats.NormalizeModelSource(modelSource)
+	if filters.UserID != 0 {
+		var stats []usagestats.ModelStat
+		key := usageQueryCacheKey("models", struct {
+			Start, End time.Time
+			Filters    usagestats.UsageLogFilters
+			Source     string
+		}{startTime, endTime, filters, normalizedSource})
+		err := s.queryCache.load(ctx, key, &stats, func(loadCtx context.Context) (any, error) {
+			return s.getModelStatsWithFiltersBySource(loadCtx, startTime, endTime, filters, normalizedSource)
+		})
+		if err != nil {
+			return nil, fmt.Errorf("get model stats with filters by source: %w", err)
+		}
+		return stats, nil
+	}
+	return s.getModelStatsWithFiltersBySource(ctx, startTime, endTime, filters, normalizedSource)
+}
+
+func (s *UsageService) getModelStatsWithFiltersBySource(ctx context.Context, startTime, endTime time.Time, filters usagestats.UsageLogFilters, normalizedSource string) ([]usagestats.ModelStat, error) {
 	type modelStatsWithUsageFiltersRepo interface {
 		GetModelStatsWithUsageFiltersBySource(ctx context.Context, startTime, endTime time.Time, filters usagestats.UsageLogFilters, source string) ([]usagestats.ModelStat, error)
 	}
@@ -428,7 +482,15 @@ func (s *UsageService) GetAPIKeyDailyUsage(ctx context.Context, userID, apiKeyID
 
 // GetBatchAPIKeyUsageStats returns today/total actual_cost for given api keys.
 func (s *UsageService) GetBatchAPIKeyUsageStats(ctx context.Context, apiKeyIDs []int64, startTime, endTime time.Time) (map[int64]*usagestats.BatchAPIKeyUsageStats, error) {
-	stats, err := s.usageRepo.GetBatchAPIKeyUsageStats(ctx, apiKeyIDs, startTime, endTime)
+	ids := append([]int64(nil), apiKeyIDs...)
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	var stats map[int64]*usagestats.BatchAPIKeyUsageStats
+	err := s.queryCache.load(ctx, usageQueryCacheKey("key-usage", struct {
+		IDs        []int64
+		Start, End time.Time
+	}{ids, startTime, endTime}), &stats, func(loadCtx context.Context) (any, error) {
+		return s.usageRepo.GetBatchAPIKeyUsageStats(loadCtx, ids, startTime, endTime)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("get batch api key usage stats: %w", err)
 	}

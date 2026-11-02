@@ -238,6 +238,11 @@ func (h *UsageHandler) List(c *gin.Context) {
 	if !ok {
 		return
 	}
+	skipTotal, ok := parseBoolQueryWithDefault(c, "skip_total", false)
+	if !ok {
+		return
+	}
+	parsed.Filters.SkipTotal = skipTotal
 
 	params := pagination.PaginationParams{
 		Page:      page,

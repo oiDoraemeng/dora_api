@@ -156,7 +156,7 @@ const TablePageLayoutStub = {
 
 const DataTableStub = {
   name: 'DataTable',
-  props: { columns: Array, data: Array, selectedKeys: Array, selectable: Boolean },
+  props: { columns: Array, data: Array, selectedKeys: Array, selectable: Boolean, loading: Boolean },
   emits: ['sort', 'update:selectedKeys'],
   template: `
     <div>
@@ -173,6 +173,7 @@ const DataTableStub = {
           <slot name="cell-id" :value="row.id" :row="row" />
         </div>
         <slot name="cell-name" :value="row.name" :row="row" />
+        <div data-test="usage"><slot name="cell-usage" :row="row" /></div>
         <slot name="cell-actions" :row="row" />
         <div data-test="current-concurrency">
           <slot name="cell-current_concurrency" :value="row.current_concurrency" :row="row" />
@@ -295,6 +296,34 @@ describe('user KeysView column settings', () => {
     getAvailableGroups.mockResolvedValue([])
     getUserGroupRates.mockResolvedValue({})
     isCurrentStep.mockReturnValue(false)
+  })
+
+  it('shows keys while cost aggregation is still pending', async () => {
+    let resolveUsage!: (value: unknown) => void
+    getDashboardApiKeysUsage.mockReturnValueOnce(new Promise((resolve) => { resolveUsage = resolve }))
+    const wrapper = await mountView()
+    expect(wrapper.findComponent({ name: 'DataTable' }).props('loading')).toBe(false)
+    expect(wrapper.text()).toContain('test-key')
+    expect(wrapper.get('[data-test="usage"]').text()).toContain('—')
+    expect(wrapper.get('[data-test="usage"]').text()).not.toContain('$0.0000')
+    resolveUsage({ stats: { 1: { api_key_id: 1, today_actual_cost: 1.25, total_actual_cost: 2.5 } } })
+    await flushPromises()
+    expect(wrapper.get('[data-test="usage"]').text()).toContain('$1.2500')
+    wrapper.unmount()
+  })
+
+  it('ignores late cost statistics after changing pages', async () => {
+    let resolveOld!: (value: unknown) => void
+    getDashboardApiKeysUsage.mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve }))
+    const wrapper = await mountView()
+    getDashboardApiKeysUsage.mockResolvedValueOnce({ stats: { 1: { today_actual_cost: 3, total_actual_cost: 4 } } })
+    await wrapper.get('[data-test="page-2"]').trigger('click')
+    await flushPromises()
+    resolveOld({ stats: { 1: { today_actual_cost: 99, total_actual_cost: 99 } } })
+    await flushPromises()
+    expect(wrapper.get('[data-test="usage"]').text()).toContain('$3.0000')
+    expect(wrapper.get('[data-test="usage"]').text()).not.toContain('$99.0000')
+    wrapper.unmount()
   })
 
   it.each([

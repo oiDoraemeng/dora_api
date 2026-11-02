@@ -287,6 +287,8 @@ type UsageLogFilters struct {
 	EndTime               *time.Time
 	// ExactTotal requests exact COUNT(*) for pagination. Default false for fast large-table paging.
 	ExactTotal bool
+	// SkipTotal opts into lookahead pagination for previews that do not show totals.
+	SkipTotal bool
 }
 
 // UsageStats represents usage statistics

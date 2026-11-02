@@ -23,7 +23,7 @@
     <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <!-- Model Distribution Chart -->
       <div class="card relative overflow-hidden p-4">
-        <div v-if="loading" class="absolute inset-0 z-10 flex items-center justify-center bg-white/50 backdrop-blur-sm dark:bg-dark-800/50">
+        <div v-if="loadingModels" class="absolute inset-0 z-10 flex items-center justify-center bg-white/50 backdrop-blur-sm dark:bg-dark-800/50">
           <LoadingSpinner size="md" />
         </div>
         <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">{{ t('dashboard.modelDistribution') }}</h3>
@@ -58,7 +58,7 @@
       </div>
 
       <!-- Token Usage Trend Chart -->
-      <TokenUsageTrend :trend-data="trend" :loading="loading" />
+      <TokenUsageTrend :trend-data="trend" :loading="loadingTrend" />
     </div>
   </div>
 </template>
@@ -76,7 +76,7 @@ import { formatCostFixed as formatCost, formatNumberLocaleString as formatNumber
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, ArcElement, Title, Tooltip, Legend, Filler } from 'chart.js'
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, ArcElement, Title, Tooltip, Legend, Filler)
 
-const props = defineProps<{ loading: boolean, startDate: string, endDate: string, granularity: string, trend: TrendDataPoint[], models: ModelStat[] }>()
+const props = defineProps<{ loading: boolean, loadingModels: boolean, loadingTrend: boolean, startDate: string, endDate: string, granularity: string, trend: TrendDataPoint[], models: ModelStat[] }>()
 defineEmits(['update:startDate', 'update:endDate', 'update:granularity', 'dateRangeChange', 'granularityChange', 'refresh'])
 const { t } = useI18n()
 

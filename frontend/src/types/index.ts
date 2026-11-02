@@ -2263,6 +2263,8 @@ export interface UserErrorListParams {
 }
 
 export interface UsageQueryParams {
+  // Preview lists can use lookahead pagination instead of an exact count.
+  skip_total?: boolean
   page?: number
   page_size?: number
   api_key_id?: number

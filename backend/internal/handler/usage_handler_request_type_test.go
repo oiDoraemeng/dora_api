@@ -120,6 +120,31 @@ func TestUserUsageListInvalidRequestType(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+func TestUserUsageListPreviewPagination(t *testing.T) {
+	for _, test := range []struct {
+		query  string
+		status int
+		skip   bool
+	}{
+		{"", http.StatusOK, false},
+		{"?skip_total=false", http.StatusOK, false},
+		{"?skip_total=true&page_size=5", http.StatusOK, true},
+		{"?skip_total=invalid", http.StatusBadRequest, false},
+	} {
+		t.Run(test.query, func(t *testing.T) {
+			repo := &userUsageRepoCapture{}
+			router := newUserUsageRequestTypeTestRouter(repo)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/usage"+test.query, nil))
+			require.Equal(t, test.status, rec.Code)
+			if test.status == http.StatusOK {
+				require.Equal(t, int64(42), repo.listFilters.UserID)
+				require.Equal(t, test.skip, repo.listFilters.SkipTotal)
+			}
+		})
+	}
+}
+
 func TestUserUsageListInvalidStream(t *testing.T) {
 	repo := &userUsageRepoCapture{}
 	router := newUserUsageRequestTypeTestRouter(repo)

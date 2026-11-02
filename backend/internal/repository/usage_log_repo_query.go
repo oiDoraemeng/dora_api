@@ -172,6 +172,9 @@ func shouldUseFastUsageLogTotal(filters UsageLogFilters) bool {
 	if filters.ExactTotal {
 		return false
 	}
+	if filters.SkipTotal {
+		return true
+	}
 	// 强选择过滤下记录集通常较小，保留精确总数。
 	return filters.UserID == 0 && filters.APIKeyID == 0 && filters.AccountID == 0
 }

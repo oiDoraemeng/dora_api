@@ -222,13 +222,16 @@ export async function getStatsByDateRange(
 export async function getByDateRange(
   startDate: string,
   endDate: string,
-  apiKeyId?: number
+  apiKeyId?: number,
+  pageSize = 100,
+  skipTotal = false
 ): Promise<PaginatedResponse<UsageLog>> {
   const params: UsageQueryParams = {
     start_date: startDate,
     end_date: endDate,
     page: 1,
-    page_size: 100
+    page_size: pageSize,
+    skip_total: skipTotal
   }
 
   if (apiKeyId !== undefined) {
