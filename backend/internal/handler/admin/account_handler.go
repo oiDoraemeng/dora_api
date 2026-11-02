@@ -1293,6 +1293,10 @@ type PreviewFromCRSRequest struct {
 // Test handles testing account connectivity with SSE streaming
 // POST /api/v1/admin/accounts/:id/test
 func (h *AccountHandler) Test(c *gin.Context) {
+	// Connectivity tests are diagnostic surfaces: administrators must see the
+	// provider's original error instead of the public gateway's generic message.
+	service.DisableClientUpstreamErrorRewrite(c)
+
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid account ID")

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/clienterror"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -37,7 +38,8 @@ func (r *openAIWSIngressCapacityShedRepo) UpdateExtra(context.Context, int64, ma
 // server_error：Codex 按闭集判定，server_is_overloaded / slow_down 属致命集，
 // 客户端会打印 "Selected model is at capacity" 并直接终止会话而不是退避重试。
 //
-// 第二个用例锁住改写范围：非容量类错误码必须原样下发，客户端依赖原码各自处理。
+// 第二个用例锁住改写范围：非容量类错误码必须原样下发，客户端依赖原码各自处理；
+// 两类上游错误的客户端可见 message 都统一为网关文案。
 func TestProxyResponsesWebSocketFromClient_RewritesCapacityShedCodeForClient(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -55,9 +57,9 @@ func TestProxyResponsesWebSocketFromClient_RewritesCapacityShedCodeForClient(t *
 			},
 			wantContains: []string{
 				`"code":"server_error"`,
-				"Our servers are currently overloaded",
+				clienterror.Message,
 			},
-			wantAbsent: []string{"server_is_overloaded"},
+			wantAbsent: []string{"server_is_overloaded", "Our servers are currently overloaded"},
 		},
 		{
 			name: "non_capacity_error_code_is_passed_through",
@@ -67,9 +69,9 @@ func TestProxyResponsesWebSocketFromClient_RewritesCapacityShedCodeForClient(t *
 			},
 			wantContains: []string{
 				`"code":"workspace_suspended"`,
-				"workspace is suspended",
+				clienterror.Message,
 			},
-			wantAbsent: []string{"server_error"},
+			wantAbsent: []string{"server_error", "workspace is suspended"},
 		},
 	}
 

@@ -50,7 +50,9 @@ const (
 	// but should be excluded from SLA/error-rate calculations.
 	// ResponseCommittedKey 由 handleErrorResponse 系列函数在写完 HTTP 错误响应后设置。
 	// ensureForwardErrorResponse 检查此 key，为 true 时跳过兜底写入，避免在已完成的 JSON 后追加 SSE。
-	ResponseCommittedKey = "response_committed"
+	ResponseCommittedKey                  = "response_committed"
+	clientUpstreamErrorKey                = "client_upstream_error"
+	clientUpstreamErrorRewriteDisabledKey = "client_upstream_error_rewrite_disabled"
 
 	// OpsLocalErrorTypeKey / OpsLocalErrorCodeKey 记录网关以 Google 错误格式回写的错误类型与错误码：
 	// Google 错误体没有 type 字段，ops_error_logger 据此按与 Claude / OpenAI 格式错误相同的口径分类。
@@ -71,6 +73,27 @@ const (
 )
 
 func MarkResponseCommitted(c *gin.Context) { c.Set(ResponseCommittedKey, true) }
+
+// MarkClientUpstreamError marks a response as an upstream failure whose
+// client-visible message must be normalized at the gateway boundary.
+func MarkClientUpstreamError(c *gin.Context) {
+	if c != nil {
+		c.Set(clientUpstreamErrorKey, true)
+	}
+}
+
+// DisableClientUpstreamErrorRewrite preserves provider diagnostics for
+// account-management probes, even if they are ever mounted behind the shared
+// gateway response middleware.
+func DisableClientUpstreamErrorRewrite(c *gin.Context) {
+	if c != nil {
+		c.Set(clientUpstreamErrorRewriteDisabledKey, true)
+	}
+}
+
+func IsClientUpstreamError(c *gin.Context) bool {
+	return c != nil && !c.GetBool(clientUpstreamErrorRewriteDisabledKey) && c.GetBool(clientUpstreamErrorKey)
+}
 
 func IsResponseCommitted(c *gin.Context) bool {
 	v, ok := c.Get(ResponseCommittedKey)
@@ -408,6 +431,7 @@ func setOpsUpstreamError(c *gin.Context, upstreamStatusCode int, upstreamMessage
 	if c == nil {
 		return
 	}
+	MarkClientUpstreamError(c)
 	if upstreamStatusCode > 0 {
 		c.Set(OpsUpstreamStatusCodeKey, upstreamStatusCode)
 	}

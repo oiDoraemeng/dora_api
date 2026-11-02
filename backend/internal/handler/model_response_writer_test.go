@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/clienterror"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -219,4 +220,86 @@ func TestRequestedModelResponsePreservesOtherResponses(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClientUpstreamErrorMessageBoundary(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, method := range []string{http.MethodPost, http.MethodGet, http.MethodPatch} {
+		t.Run(method+"/json", func(t *testing.T) {
+			router := gin.New()
+			router.Use(InboundEndpointMiddleware())
+			router.Handle(method, "/v1/audit", func(c *gin.Context) {
+				service.SetOpsUpstreamError(c, http.StatusUnprocessableEntity, "provider custom", "private detail")
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"error": gin.H{
+					"type": "provider_error", "code": "custom_code", "message": "provider custom",
+				}})
+			})
+
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(method, "/v1/audit", nil))
+			require.Equal(t, http.StatusUnprocessableEntity, recorder.Code)
+			require.Equal(t, "provider_error", gjson.Get(recorder.Body.String(), "error.type").String())
+			require.Equal(t, "custom_code", gjson.Get(recorder.Body.String(), "error.code").String())
+			require.Equal(t, clienterror.Message, gjson.Get(recorder.Body.String(), "error.message").String())
+			require.NotContains(t, recorder.Body.String(), "provider custom")
+		})
+	}
+
+	t.Run("sse after successful output", func(t *testing.T) {
+		router := gin.New()
+		router.Use(InboundEndpointMiddleware())
+		router.POST("/v1/responses", func(c *gin.Context) {
+			setOpsRequestContext(c, "gpt-client", true)
+			c.Header("Content-Type", "text/event-stream")
+			_, err := c.Writer.WriteString("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"model\":\"provider-model\"}}\n\n")
+			require.NoError(t, err)
+			c.Writer.Flush()
+			service.SetOpsUpstreamError(c, http.StatusServiceUnavailable, "provider custom", "")
+			_, err = c.Writer.WriteString("event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"model\":\"provider-model\",\"error\":{\"code\":\"server_error\",\"message\":\"provider custom\"}}}\n\n")
+			require.NoError(t, err)
+			c.Writer.Flush()
+		})
+
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", nil))
+		require.Contains(t, recorder.Body.String(), clienterror.Message)
+		require.NotContains(t, recorder.Body.String(), "provider custom")
+		require.Equal(t, 2, strings.Count(recorder.Body.String(), `"model":"gpt-client"`))
+	})
+}
+
+func TestClientUpstreamErrorMessageBoundaryPreservesLocalErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(InboundEndpointMiddleware())
+	router.POST("/v1/responses", func(c *gin.Context) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+			"type": "invalid_request_error", "message": "model is required",
+		}})
+	})
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", nil))
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Equal(t, "model is required", gjson.Get(recorder.Body.String(), "error.message").String())
+	require.NotContains(t, recorder.Body.String(), clienterror.Message)
+}
+
+func TestClientUpstreamErrorMessageBoundaryAllowsDiagnosticOptOut(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(InboundEndpointMiddleware())
+	router.POST("/api/v1/admin/accounts/:id/test", func(c *gin.Context) {
+		service.DisableClientUpstreamErrorRewrite(c)
+		service.SetOpsUpstreamError(c, http.StatusServiceUnavailable, "provider diagnostic", "")
+		c.Header("Content-Type", "text/event-stream")
+		_, err := c.Writer.WriteString("data: {\"type\":\"error\",\"error\":{\"message\":\"provider diagnostic\"}}\n\n")
+		require.NoError(t, err)
+		c.Writer.Flush()
+	})
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/7/test", nil))
+	require.Contains(t, recorder.Body.String(), "provider diagnostic")
+	require.NotContains(t, recorder.Body.String(), clienterror.Message)
 }

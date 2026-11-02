@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/clienterror"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/modelresponse"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
@@ -643,6 +644,7 @@ func (c *openAIWSClientFrameConn) WriteFrame(ctx context.Context, msgType coderw
 		ctx = context.Background()
 	}
 	if msgType == coderws.MessageText {
+		payload = clienterror.Rewrite(payload)
 		if model := c.responseModel.Load(); model != nil {
 			payload = modelresponse.Rewrite(payload, *model)
 		}

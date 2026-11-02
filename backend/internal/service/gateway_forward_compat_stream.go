@@ -282,6 +282,7 @@ func writeAnthropicCompatResponsesStreamFailure(c *gin.Context, state *apicompat
 }
 
 func commitAnthropicCompatStreamFailure(c *gin.Context, failure *anthropicCompatStreamFailure, frame string) {
+	MarkClientUpstreamError(c)
 	MarkOpsStreamError(c, failure.errType, failure.message, http.StatusBadGateway)
 	MarkResponseCommitted(c)
 	if _, err := io.WriteString(c.Writer, frame); err != nil {

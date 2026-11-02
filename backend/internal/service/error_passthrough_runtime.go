@@ -50,6 +50,7 @@ func applyErrorPassthroughRule(
 	if rule == nil {
 		return status, errType, errMsg, false
 	}
+	MarkClientUpstreamError(c)
 
 	status = upstreamStatus
 	if !rule.PassthroughCode && rule.ResponseCode != nil {

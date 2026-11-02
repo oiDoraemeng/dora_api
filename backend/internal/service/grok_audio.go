@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/clienterror"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/modelresponse"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
@@ -223,6 +224,7 @@ func (s *OpenAIGatewayService) ProxyGrokRealtimeConn(ctx context.Context, c *gin
 				audioObserved.Store(true)
 			}
 			msg = rewriteGrokRealtimeResponseModel(msg, requestedModel)
+			msg = clienterror.Rewrite(msg)
 			if writeErr := client.Write(ctx, coderws.MessageText, msg); writeErr != nil {
 				errCh <- writeErr
 				return
