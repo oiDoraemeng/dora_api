@@ -97,6 +97,12 @@ func TestEasyPayConfirmNotification(t *testing.T) {
 			wantErr:     "amount mismatch",
 		},
 		{
+			name:        "nonfinite upstream amount",
+			body:        `{"code":1,"trade_no":"2026101600001","money":"NaN","status":1}`,
+			notifyTrade: "2026101600001",
+			wantErr:     "amount mismatch",
+		},
+		{
 			name:        "trade_no conflict",
 			body:        `{"code":1,"trade_no":"2026101699999","money":"10.00","status":1}`,
 			notifyTrade: "2026101600001",
@@ -119,7 +125,7 @@ func TestEasyPayConfirmNotification(t *testing.T) {
 			body:        `<html>502 Bad Gateway</html>`,
 			status:      http.StatusBadGateway,
 			notifyTrade: "2026101600001",
-			wantErr:     "parse query",
+			wantErr:     "query HTTP 502",
 		},
 	}
 	for _, tt := range tests {

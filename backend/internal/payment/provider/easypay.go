@@ -325,7 +325,7 @@ func (e *EasyPay) QueryOrder(ctx context.Context, tradeNo string) (*payment.Quer
 	}, nil
 }
 
-// easyPayQueryResult is the normalized api.php?act=order answer. tradeNo is
+// easyPayQueryResult is the normalized upstream order answer. tradeNo is
 // the upstream trade number exactly as returned (empty when absent).
 type easyPayQueryResult struct {
 	status  string
@@ -345,7 +345,7 @@ func (e *EasyPay) queryOrder(ctx context.Context, outTradeNo string) (*easyPayQu
 	for k, v := range params {
 		query.Set(k, v)
 	}
-	body, err := e.post(ctx, e.apiBase()+"/api.php?"+query.Encode(), params)
+	body, httpStatus, err := e.postRaw(ctx, e.apiBase()+"/api.php?"+query.Encode(), params)
 	if err != nil {
 		// The request URL carries the merchant key; never let it reach logs
 		// or audit records through *url.Error.
@@ -354,6 +354,15 @@ func (e *EasyPay) queryOrder(ctx context.Context, outTradeNo string) (*easyPayQu
 			err = urlErr.Err
 		}
 		return nil, fmt.Errorf("easypay query: %w", err)
+	}
+	// YPay installations can accept submit.php/mapi.php payments without
+	// exposing the legacy api.php endpoint. Only switch protocols when that
+	// endpoint is unavailable, never after a failed or unpaid order query.
+	if httpStatus == http.StatusNotFound || httpStatus == http.StatusMethodNotAllowed {
+		return e.queryYPayOrder(ctx, outTradeNo)
+	}
+	if httpStatus < http.StatusOK || httpStatus >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("easypay query HTTP %d", httpStatus)
 	}
 	// Scalars are decoded leniently: PHP deployments commonly serialize
 	// integer columns as strings ("status":"1").
@@ -426,7 +435,9 @@ func (e *EasyPay) ConfirmNotification(ctx context.Context, n *payment.PaymentNot
 		return fmt.Errorf("easypay confirm: upstream reports order %s as not paid", n.OrderID)
 	}
 	queriedAmount, err := strconv.ParseFloat(result.money, 64)
-	if err != nil || math.Abs(queriedAmount-n.Amount) > easypayAmountTolerance {
+	if err != nil || math.IsNaN(queriedAmount) || math.IsInf(queriedAmount, 0) ||
+		math.IsNaN(n.Amount) || math.IsInf(n.Amount, 0) ||
+		math.Abs(queriedAmount-n.Amount) > easypayAmountTolerance {
 		return fmt.Errorf("easypay confirm: amount mismatch: notified %v, upstream %q", n.Amount, result.money)
 	}
 	if result.tradeNo != "" {
