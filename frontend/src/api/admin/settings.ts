@@ -1164,7 +1164,21 @@ export interface TargetedEmailResult {
   errors?: string[];
 }
 
-export interface TargetedEmailDeliveryStatus { last_sent_at?: string; sent_current: boolean }
+export interface TargetedEmailJob extends TargetedEmailResult {
+  id: number;
+  subject: string;
+  interval_minutes: number;
+  total: number;
+  status: 'running' | 'completed' | 'cancelled';
+  pending: number;
+  sending: number;
+  cancelled: number;
+  next_send_at: string;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface TargetedEmailDeliveryStatus { last_sent_at?: string; sent_current: boolean; blocked: boolean }
 export interface TargetedEmailTemplate { key: 'thanks' | 'offer' | 'promotion' | 'notice'; subject: string; body: string }
 
 export async function sendTargetedEmailTest(
@@ -1178,13 +1192,26 @@ export async function sendTargetedEmailTest(
 }
 
 export async function sendTargetedEmailBatch(
-  request: TargetedEmailRequest,
-): Promise<TargetedEmailResult> {
-  const { data } = await apiClient.post<TargetedEmailResult>(
+  request: TargetedEmailRequest & { interval_minutes: number },
+): Promise<TargetedEmailJob> {
+  const { data } = await apiClient.post<TargetedEmailJob>(
     "/admin/settings/targeted-email/batch",
     request,
   );
   return data;
+}
+
+export async function getTargetedEmailJob(): Promise<{ job: TargetedEmailJob | null }> {
+  const { data } = await apiClient.get<{ job: TargetedEmailJob | null }>("/admin/settings/targeted-email/job");
+  return data;
+}
+
+export async function cancelTargetedEmailJob(id: number): Promise<void> {
+  await apiClient.post(`/admin/settings/targeted-email/jobs/${id}/cancel`);
+}
+
+export async function setTargetedEmailUserPreference(userID: number, blocked: boolean): Promise<void> {
+  await apiClient.put(`/admin/settings/targeted-email/users/${userID}/preference`, { blocked });
 }
 
 export async function getTargetedEmailDeliveryStatuses(request: TargetedEmailRequest): Promise<{ statuses: Record<string, TargetedEmailDeliveryStatus> }> {
@@ -1193,7 +1220,10 @@ export async function getTargetedEmailDeliveryStatuses(request: TargetedEmailReq
 }
 
 export async function getTargetedEmailTemplates(): Promise<{ templates: TargetedEmailTemplate[] }> { const { data } = await apiClient.get<{ templates: TargetedEmailTemplate[] }>("/admin/settings/targeted-email/templates"); return data }
-export async function saveTargetedEmailTemplates(templates: TargetedEmailTemplate[]): Promise<void> { await apiClient.put("/admin/settings/targeted-email/templates", { templates }) }
+export async function saveTargetedEmailTemplates(templates: TargetedEmailTemplate[]): Promise<{ templates: TargetedEmailTemplate[] }> {
+  const { data } = await apiClient.put<{ templates: TargetedEmailTemplate[] }>("/admin/settings/targeted-email/templates", { templates });
+  return data;
+}
 
 // ==================== Email Template Settings ====================
 
@@ -1637,6 +1667,9 @@ export const settingsAPI = {
   sendTestEmail,
   sendTargetedEmailTest,
   sendTargetedEmailBatch,
+  getTargetedEmailJob,
+  cancelTargetedEmailJob,
+  setTargetedEmailUserPreference,
 	 getTargetedEmailDeliveryStatuses,
 	 getTargetedEmailTemplates,
 	 saveTargetedEmailTemplates,

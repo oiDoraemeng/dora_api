@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lib/pq"
@@ -14,12 +15,20 @@ import (
 type TargetedEmailDeliveryStatus struct {
 	LastSentAt  *time.Time
 	SentCurrent bool
+	Blocked     bool
 }
 
-type TargetedEmailDeliveryService struct{ db *sql.DB }
+type TargetedEmailDeliveryService struct {
+	db        *sql.DB
+	sendEmail func(context.Context, string, string, string) error
+	startOnce sync.Once
+	stopOnce  sync.Once
+	stopCh    chan struct{}
+	wg        sync.WaitGroup
+}
 
 func NewTargetedEmailDeliveryService(db *sql.DB) *TargetedEmailDeliveryService {
-	return &TargetedEmailDeliveryService{db: db}
+	return &TargetedEmailDeliveryService{db: db, stopCh: make(chan struct{})}
 }
 
 func TargetedEmailContentHash(subject, html string) string {
@@ -65,5 +74,25 @@ func (s *TargetedEmailDeliveryService) Statuses(ctx context.Context, recipients 
 		}
 		result[email] = TargetedEmailDeliveryStatus{LastSentAt: sentAt, SentCurrent: current}
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	blockedRows, err := s.db.QueryContext(ctx, `SELECT LOWER(u.email) FROM users u JOIN targeted_email_user_preferences p ON p.user_id = u.id
+		WHERE u.deleted_at IS NULL AND p.blocked AND LOWER(u.email) = ANY($1)`, pq.Array(recipients))
+	if err != nil {
+		return nil, err
+	}
+	defer blockedRows.Close()
+	for blockedRows.Next() {
+		var email string
+		if err := blockedRows.Scan(&email); err != nil {
+			return nil, err
+		}
+		status := result[email]
+		status.Blocked = true
+		result[email] = status
+	}
+	return result, blockedRows.Err()
 }

@@ -53,6 +53,12 @@ func ProvideEmailQueueService(emailService *EmailService) *EmailQueueService {
 	return NewEmailQueueService(emailService, 3)
 }
 
+func ProvideTargetedEmailDeliveryService(db *sql.DB, emailService *EmailService) *TargetedEmailDeliveryService {
+	svc := NewTargetedEmailDeliveryService(db)
+	svc.Start(emailService)
+	return svc
+}
+
 // ProvideAuthService wires the optional captcha providers into AuthService while
 // keeping NewAuthService's public constructor compatible with existing tests.
 func ProvideAuthService(
@@ -936,6 +942,7 @@ var ProviderSet = wire.NewSet(
 	ProvideOpsCleanupService,
 	ProvideOpsScheduledReportService,
 	NewEmailService,
+	ProvideTargetedEmailDeliveryService,
 	NewNotificationEmailService,
 	ProvideEmailQueueService,
 	NewTurnstileService,

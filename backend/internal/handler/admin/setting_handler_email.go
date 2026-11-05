@@ -2,10 +2,13 @@ package admin
 
 import (
 	"encoding/json"
+	"errors"
 	"html"
 	"net/mail"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -118,12 +121,13 @@ type TargetedEmailResult struct {
 
 type TargetedEmailDeliveryStatusRequest struct {
 	Recipients []string `json:"recipients" binding:"required,min=1,max=500"`
-	Subject    string   `json:"subject" binding:"required,max=200"`
-	HTML       string   `json:"html" binding:"required,max=200000"`
+	Subject    string   `json:"subject" binding:"max=200"`
+	HTML       string   `json:"html" binding:"max=200000"`
 }
 type TargetedEmailDeliveryStatus struct {
 	LastSentAt  *string `json:"last_sent_at,omitempty"`
 	SentCurrent bool    `json:"sent_current"`
+	Blocked     bool    `json:"blocked"`
 }
 
 type TargetedEmailTemplate struct {
@@ -137,12 +141,16 @@ type TargetedEmailTemplatesRequest struct {
 
 func (h *SettingHandler) GetTargetedEmailTemplates(c *gin.Context) {
 	raw, err := h.settingService.GetTargetedEmailTemplates(c.Request.Context())
-	if err != nil || strings.TrimSpace(raw) == "" {
+	if err != nil && !errors.Is(err, service.ErrSettingNotFound) {
+		response.InternalError(c, "Failed to load targeted email templates")
+		return
+	}
+	if strings.TrimSpace(raw) == "" {
 		response.Success(c, gin.H{"templates": []TargetedEmailTemplate{}})
 		return
 	}
 	var templates []TargetedEmailTemplate
-	if err := json.Unmarshal([]byte(raw), &templates); err != nil {
+	if err := json.Unmarshal([]byte(raw), &templates); err != nil || !normalizeTargetedEmailTemplates(templates) {
 		response.InternalError(c, "Invalid targeted email template setting")
 		return
 	}
@@ -155,17 +163,9 @@ func (h *SettingHandler) SaveTargetedEmailTemplates(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	keys := map[string]bool{"thanks": true, "offer": true, "promotion": true, "notice": true}
-	seen := map[string]bool{}
-	for _, item := range req.Templates {
-		item.Key = strings.TrimSpace(item.Key)
-		item.Subject = strings.TrimSpace(item.Subject)
-		item.Body = strings.TrimSpace(item.Body)
-		if !keys[item.Key] || seen[item.Key] || item.Subject == "" || len(item.Subject) > 200 || item.Body == "" || len(item.Body) > 50000 {
-			response.BadRequest(c, "Invalid template")
-			return
-		}
-		seen[item.Key] = true
+	if !normalizeTargetedEmailTemplates(req.Templates) {
+		response.BadRequest(c, "Invalid template: each template requires a unique key, a subject of at most 200 characters and HTML of at most 50000 characters")
+		return
 	}
 	raw, err := json.Marshal(req.Templates)
 	if err != nil || h.settingService.SaveTargetedEmailTemplates(c.Request.Context(), string(raw)) != nil {
@@ -173,6 +173,25 @@ func (h *SettingHandler) SaveTargetedEmailTemplates(c *gin.Context) {
 		return
 	}
 	response.Success(c, gin.H{"templates": req.Templates})
+}
+
+func normalizeTargetedEmailTemplates(templates []TargetedEmailTemplate) bool {
+	if len(templates) != 4 {
+		return false
+	}
+	keys := map[string]bool{"thanks": true, "offer": true, "promotion": true, "notice": true}
+	seen := make(map[string]bool, len(templates))
+	for index := range templates {
+		item := &templates[index]
+		item.Key = strings.TrimSpace(item.Key)
+		item.Subject = strings.TrimSpace(item.Subject)
+		item.Body = strings.TrimSpace(item.Body)
+		if !keys[item.Key] || seen[item.Key] || item.Subject == "" || utf8.RuneCountInString(item.Subject) > 200 || item.Body == "" || utf8.RuneCountInString(item.Body) > 50000 {
+			return false
+		}
+		seen[item.Key] = true
+	}
+	return true
 }
 
 // SendTestEmail 发送测试邮件
@@ -292,6 +311,17 @@ func (h *SettingHandler) SendTargetedEmailTest(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
+	if h.targetedEmailDeliveries != nil {
+		blocked, err := h.targetedEmailDeliveries.IsRecipientBlocked(c.Request.Context(), req.Recipients[0])
+		if err != nil {
+			response.InternalError(c, "Failed to load email preference")
+			return
+		}
+		if blocked {
+			response.ErrorFrom(c, service.ErrTargetedEmailBlocked)
+			return
+		}
+	}
 	if err := h.emailService.SendEmail(c.Request.Context(), req.Recipients[0], req.Subject, req.HTML); err != nil {
 		response.BadRequest(c, "Failed to send test email: "+err.Error())
 		return
@@ -299,58 +329,96 @@ func (h *SettingHandler) SendTargetedEmailTest(c *gin.Context) {
 	response.Success(c, TargetedEmailResult{Sent: 1})
 }
 
-// SendTargetedEmailBatch sends an administrator-authored email to the selected
-// recipients. Sending continues after a per-recipient failure so the admin can
-// see a complete result and retry only failed addresses if needed.
-// POST /api/v1/admin/settings/targeted-email/batch
+// SendTargetedEmailBatch queues a durable campaign; SMTP runs outside the HTTP request.
 func (h *SettingHandler) SendTargetedEmailBatch(c *gin.Context) {
-	var req TargetedEmailRequest
+	var req struct {
+		TargetedEmailRequest
+		IntervalMinutes *int `json:"interval_minutes"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if err := validateTargetedEmailRequest(&req); err != nil {
+	if err := validateTargetedEmailRequest(&req.TargetedEmailRequest); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
-
-	result := TargetedEmailResult{}
-	contentHash := service.TargetedEmailContentHash(req.Subject, req.HTML)
-	for _, recipient := range req.Recipients {
-		if h.targetedEmailDeliveries != nil {
-			claimed, err := h.targetedEmailDeliveries.Claim(c.Request.Context(), recipient, contentHash, req.Subject)
-			if err != nil {
-				result.Failed++
-				result.Errors = append(result.Errors, recipient+": unable to record delivery")
-				continue
-			}
-			if !claimed {
-				result.Skipped++
-				continue
-			}
-		}
-		if err := h.emailService.SendEmail(c.Request.Context(), recipient, req.Subject, req.HTML); err != nil {
-			if h.targetedEmailDeliveries != nil {
-				_ = h.targetedEmailDeliveries.Release(c.Request.Context(), recipient, contentHash)
-			}
-			result.Failed++
-			if len(result.Errors) < 20 {
-				result.Errors = append(result.Errors, recipient+": "+err.Error())
-			}
-			continue
-		}
-		if h.targetedEmailDeliveries != nil {
-			if err := h.targetedEmailDeliveries.MarkSent(c.Request.Context(), recipient, contentHash); err != nil {
-				result.Failed++
-				if len(result.Errors) < 20 {
-					result.Errors = append(result.Errors, recipient+": unable to save delivery record")
-				}
-				continue
-			}
-		}
-		result.Sent++
+	interval := service.DefaultTargetedEmailIntervalMinutes
+	if req.IntervalMinutes != nil {
+		interval = *req.IntervalMinutes
 	}
-	response.Success(c, result)
+	if interval < 1 || interval > 1440 {
+		response.BadRequest(c, "发送间隔须为 1–1440 分钟的整数")
+		return
+	}
+	if h.targetedEmailDeliveries == nil {
+		response.InternalError(c, "targeted email queue is not configured")
+		return
+	}
+	if _, err := h.emailService.GetSMTPConfig(c.Request.Context()); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	job, err := h.targetedEmailDeliveries.CreateJob(c.Request.Context(), req.Recipients, req.Subject, req.HTML, interval)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, job)
+}
+
+func (h *SettingHandler) GetTargetedEmailJob(c *gin.Context) {
+	if h.targetedEmailDeliveries == nil {
+		response.InternalError(c, "targeted email queue is not configured")
+		return
+	}
+	job, err := h.targetedEmailDeliveries.GetJob(c.Request.Context(), 0)
+	if err != nil {
+		response.InternalError(c, "Failed to load email job")
+		return
+	}
+	response.Success(c, gin.H{"job": job})
+}
+
+func (h *SettingHandler) CancelTargetedEmailJob(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		response.BadRequest(c, "Invalid job ID")
+		return
+	}
+	if h.targetedEmailDeliveries == nil {
+		response.InternalError(c, "targeted email queue is not configured")
+		return
+	}
+	if err := h.targetedEmailDeliveries.CancelJob(c.Request.Context(), id); err != nil {
+		response.InternalError(c, "Failed to cancel email job")
+		return
+	}
+	response.Success(c, gin.H{"message": "任务已取消，正在发送的邮件可能仍会完成"})
+}
+
+func (h *SettingHandler) SetTargetedEmailUserPreference(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		response.BadRequest(c, "Invalid user ID")
+		return
+	}
+	var req struct {
+		Blocked *bool `json:"blocked" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if h.targetedEmailDeliveries == nil {
+		response.InternalError(c, "targeted email queue is not configured")
+		return
+	}
+	if err := h.targetedEmailDeliveries.SetUserBlocked(c.Request.Context(), id, *req.Blocked); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"user_id": id, "blocked": *req.Blocked})
 }
 
 // GetTargetedEmailDeliveryStatuses returns prior successful targeted deliveries for the current draft.
@@ -361,7 +429,7 @@ func (h *SettingHandler) GetTargetedEmailDeliveryStatuses(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if err := validateTargetedEmailRequest((*TargetedEmailRequest)(&req)); err != nil {
+	if err := validateTargetedEmailRecipients(&req.Recipients); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
@@ -376,7 +444,7 @@ func (h *SettingHandler) GetTargetedEmailDeliveryStatuses(c *gin.Context) {
 	}
 	items := make(map[string]TargetedEmailDeliveryStatus, len(statuses))
 	for email, status := range statuses {
-		item := TargetedEmailDeliveryStatus{SentCurrent: status.SentCurrent}
+		item := TargetedEmailDeliveryStatus{SentCurrent: status.SentCurrent, Blocked: status.Blocked}
 		if status.LastSentAt != nil {
 			value := status.LastSentAt.Format(time.RFC3339)
 			item.LastSentAt = &value
@@ -392,9 +460,13 @@ func validateTargetedEmailRequest(req *TargetedEmailRequest) error {
 	if req.Subject == "" || req.HTML == "" {
 		return service.ErrEmailNotConfigured
 	}
-	seen := make(map[string]struct{}, len(req.Recipients))
-	recipients := make([]string, 0, len(req.Recipients))
-	for _, raw := range req.Recipients {
+	return validateTargetedEmailRecipients(&req.Recipients)
+}
+
+func validateTargetedEmailRecipients(values *[]string) error {
+	seen := make(map[string]struct{}, len(*values))
+	recipients := make([]string, 0, len(*values))
+	for _, raw := range *values {
 		recipient := strings.TrimSpace(strings.ToLower(raw))
 		parsed, err := mail.ParseAddress(recipient)
 		if err != nil || parsed.Address != recipient {
@@ -409,7 +481,7 @@ func validateTargetedEmailRequest(req *TargetedEmailRequest) error {
 	if len(recipients) == 0 || len(recipients) > maxTargetedEmailRecipients {
 		return service.ErrInvalidVerifyCode
 	}
-	req.Recipients = recipients
+	*values = recipients
 	return nil
 }
 
