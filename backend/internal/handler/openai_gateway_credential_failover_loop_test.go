@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/clienterror"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -809,7 +810,7 @@ func TestResponsesWebSocketCredentialFailoverLoop(t *testing.T) {
 		cancel()
 		var closeErr coderws.CloseError
 		require.ErrorAs(t, err, &closeErr)
-		require.Contains(t, closeErr.Reason, service.GrokCredentialUnavailableClientMessage)
+		require.Contains(t, closeErr.Reason, clienterror.Message)
 		require.Equal(t, 1, repo.selectorCalls())
 		require.Empty(t, upstream.accountHits())
 	})
@@ -927,7 +928,7 @@ func newGrokCredentialFailoverHandler(t *testing.T, mode string) (*OpenAIGateway
 	gateway := service.NewOpenAIGatewayService(
 		repo, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
 		service.NewBillingService(cfg, nil), nil, billingCache, upstream,
-		&service.DeferredService{}, nil, provider, nil, nil, nil, nil, nil,
+		&service.DeferredService{}, nil, nil, provider, nil, nil, nil, nil, nil,
 	)
 	cache := &concurrencyCacheMock{
 		acquireUserSlotFn:    func(context.Context, int64, int, string) (bool, error) { return true, nil },
