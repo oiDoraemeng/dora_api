@@ -40,11 +40,11 @@ func (w *requestedModelWriter) prepare() {
 	}
 	success := w.Status() >= 200 && w.Status() < 300
 	w.rewriteModel = success && w.c.Request != nil && w.c.Request.Method == http.MethodPost && w.model != ""
-	upstreamError := service.IsClientUpstreamError(w.c)
+	rewriteError := service.ShouldRewriteClientError(w.c)
 	contentType := strings.ToLower(strings.TrimSpace(strings.SplitN(w.Header().Get("Content-Type"), ";", 2)[0]))
 	// Keep observing SSE streams because an upstream failure can arrive only
 	// after earlier success events have already been flushed.
-	if contentType != "text/event-stream" && !w.rewriteModel && !upstreamError {
+	if contentType != "text/event-stream" && !w.rewriteModel && !rewriteError {
 		w.mode = "pass"
 		return
 	}
@@ -130,7 +130,7 @@ func (w *requestedModelWriter) writeSSEEvents() {
 		if w.rewriteModel {
 			payload = modelresponse.RewriteSSE(payload, w.model)
 		}
-		if service.IsClientUpstreamError(w.c) {
+		if service.ShouldRewriteClientError(w.c) {
 			payload = clienterror.RewriteSSE(payload)
 		}
 		_, w.err = w.ResponseWriter.Write(payload)
@@ -150,7 +150,7 @@ func (w *requestedModelWriter) finish() {
 		if w.rewriteModel {
 			payload = modelresponse.RewriteSSE(payload, w.model)
 		}
-		if service.IsClientUpstreamError(w.c) {
+		if service.ShouldRewriteClientError(w.c) {
 			payload = clienterror.RewriteSSE(payload)
 		}
 	} else {
@@ -164,7 +164,7 @@ func (w *requestedModelWriter) rewriteJSON(payload []byte) []byte {
 	if w.rewriteModel {
 		payload = modelresponse.Rewrite(payload, w.model)
 	}
-	if service.IsClientUpstreamError(w.c) {
+	if service.ShouldRewriteClientError(w.c) {
 		payload = clienterror.Rewrite(payload)
 	}
 	return payload

@@ -77,6 +77,7 @@ func (s *GatewayService) ForwardAsResponses(
 		}
 	}
 	if err := validateClaude55Request(body, mappedModel); err != nil {
+		MarkClientErrorForRewrite(c)
 		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
@@ -84,6 +85,7 @@ func (s *GatewayService) ForwardAsResponses(
 	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responsesReq)
 	if err != nil {
 		if isClaude55SignedThinkingModel(mappedModel) {
+			MarkClientErrorForRewrite(c)
 			writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		}
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)

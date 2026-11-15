@@ -66,6 +66,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		}
 	}
 	if err := validateClaude55Request(body, mappedModel); err != nil {
+		MarkClientErrorForRewrite(c)
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
@@ -73,6 +74,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(responsesReq)
 	if err != nil {
 		if isClaude55SignedThinkingModel(mappedModel) {
+			MarkClientErrorForRewrite(c)
 			writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		}
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)

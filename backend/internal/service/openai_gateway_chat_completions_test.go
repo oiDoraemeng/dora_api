@@ -1814,6 +1814,7 @@ func TestGPT61SolRejectsDisabledReasoningBeforeForwarding(t *testing.T) {
 		_, err := svc.forwardAsRawChatCompletions(context.Background(), c, account, body, "")
 		require.Error(t, err)
 		require.Equal(t, http.StatusBadRequest, rec.Code)
+		require.True(t, ShouldRewriteClientError(c))
 		require.Contains(t, rec.Body.String(), "gpt-6.1-sol")
 	}
 }

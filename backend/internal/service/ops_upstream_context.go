@@ -51,7 +51,7 @@ const (
 	// ResponseCommittedKey 由 handleErrorResponse 系列函数在写完 HTTP 错误响应后设置。
 	// ensureForwardErrorResponse 检查此 key，为 true 时跳过兜底写入，避免在已完成的 JSON 后追加 SSE。
 	ResponseCommittedKey                  = "response_committed"
-	clientUpstreamErrorKey                = "client_upstream_error"
+	clientErrorRewriteKey                 = "client_error_rewrite"
 	clientUpstreamErrorRewriteDisabledKey = "client_upstream_error_rewrite_disabled"
 
 	// OpsLocalErrorTypeKey / OpsLocalErrorCodeKey 记录网关以 Google 错误格式回写的错误类型与错误码：
@@ -74,12 +74,18 @@ const (
 
 func MarkResponseCommitted(c *gin.Context) { c.Set(ResponseCommittedKey, true) }
 
-// MarkClientUpstreamError marks a response as an upstream failure whose
-// client-visible message must be normalized at the gateway boundary.
-func MarkClientUpstreamError(c *gin.Context) {
+// MarkClientErrorForRewrite marks a response whose client-visible error
+// message may contain private routing or provider details.
+func MarkClientErrorForRewrite(c *gin.Context) {
 	if c != nil {
-		c.Set(clientUpstreamErrorKey, true)
+		c.Set(clientErrorRewriteKey, true)
 	}
+}
+
+// MarkClientUpstreamError marks an upstream failure for client-boundary
+// normalization while preserving the original provider diagnostics for ops.
+func MarkClientUpstreamError(c *gin.Context) {
+	MarkClientErrorForRewrite(c)
 }
 
 // DisableClientUpstreamErrorRewrite preserves provider diagnostics for
@@ -91,8 +97,14 @@ func DisableClientUpstreamErrorRewrite(c *gin.Context) {
 	}
 }
 
+func ShouldRewriteClientError(c *gin.Context) bool {
+	return c != nil && !c.GetBool(clientUpstreamErrorRewriteDisabledKey) && c.GetBool(clientErrorRewriteKey)
+}
+
+// IsClientUpstreamError is kept for callers that still use the upstream-only
+// terminology. New client-boundary code should use ShouldRewriteClientError.
 func IsClientUpstreamError(c *gin.Context) bool {
-	return c != nil && !c.GetBool(clientUpstreamErrorRewriteDisabledKey) && c.GetBool(clientUpstreamErrorKey)
+	return ShouldRewriteClientError(c)
 }
 
 func IsResponseCommitted(c *gin.Context) bool {

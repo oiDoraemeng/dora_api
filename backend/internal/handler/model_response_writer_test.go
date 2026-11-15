@@ -285,6 +285,24 @@ func TestClientUpstreamErrorMessageBoundaryPreservesLocalErrors(t *testing.T) {
 	require.NotContains(t, recorder.Body.String(), clienterror.Message)
 }
 
+func TestClientErrorMessageBoundaryRewritesSensitiveLocalErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(InboundEndpointMiddleware())
+	router.POST("/v1/responses", func(c *gin.Context) {
+		service.MarkClientErrorForRewrite(c)
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+			"type": "invalid_request_error", "message": "private-mapped-model does not support temperature",
+		}})
+	})
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", nil))
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Equal(t, clienterror.Message, gjson.Get(recorder.Body.String(), "error.message").String())
+	require.NotContains(t, recorder.Body.String(), "private-mapped-model")
+}
+
 func TestClientUpstreamErrorMessageBoundaryAllowsDiagnosticOptOut(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

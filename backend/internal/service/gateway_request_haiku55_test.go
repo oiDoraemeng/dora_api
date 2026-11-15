@@ -3,9 +3,12 @@
 package service
 
 import (
+	"context"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,4 +55,26 @@ func TestValidateClaude55Request_Haiku55(t *testing.T) {
 				"error %q should contain %q", err.Error(), tc.wantErr)
 		})
 	}
+}
+
+func TestForwardMappedClaude55ValidationMarksClientErrorForRewrite(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"public-model","temperature":0.5,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"public-model": "claude-haiku-5-5"},
+		},
+	}
+
+	_, err = (&GatewayService{}).Forward(context.Background(), c, account, parsed)
+	require.ErrorContains(t, err, "claude-haiku-5-5")
+	require.True(t, ShouldRewriteClientError(c))
+	require.Contains(t, recorder.Body.String(), "claude-haiku-5-5")
 }

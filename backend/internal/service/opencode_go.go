@@ -81,6 +81,7 @@ func IsOpenCodeUnsupportedModel(model string) bool {
 func writeOpenCodeUnsupportedModelError(c *gin.Context, isAnthropic bool, model string) error {
 	msg := fmt.Sprintf("Model '%s' is not supported on OpenCode standard gateway (gemini models require Google SDK endpoint, jev models require System One endpoint)", model)
 	if c != nil {
+		MarkClientErrorForRewrite(c)
 		if isAnthropic {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"type": "error",
