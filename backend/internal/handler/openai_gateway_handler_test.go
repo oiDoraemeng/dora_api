@@ -1545,6 +1545,31 @@ func TestOpenAIResponsesWebSocket_PassthroughTracksModelPerTurn(t *testing.T) {
 		"each turn must be billed with its own channel-mapped model")
 }
 
+func TestKeywordRoutingWebSocketInitialQuestionAndConnectionReuse(t *testing.T) {
+	settings := service.NewSettingService(&contentModerationHandlerSettingRepo{}, nil)
+	_, err := settings.SetKeywordRoutingConfig(context.Background(), service.KeywordRoutingConfig{Keywords: []string{"画图"}})
+	require.NoError(t, err)
+	t.Run("hit retains connection for subsequent nonmatching question", func(t *testing.T) {
+		got := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
+			settingService: settings, keywordRoutingEnabled: true,
+			firstPayload:  `{"type":"response.create","model":"gpt-5.6-sol","input":"画图","stream":false}`,
+			secondPayload: `{"type":"response.create","model":"gpt-5.6-sol","input":"普通代码问题","stream":false}`,
+		})
+		require.Len(t, got.upstreamPayloads, 2)
+		require.Len(t, got.logs, 2)
+		require.Equal(t, got.logs[0].AccountID, got.logs[1].AccountID)
+	})
+	t.Run("new connection evaluates initial miss", func(t *testing.T) {
+		runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
+			settingService: settings, keywordRoutingEnabled: true,
+			firstPayload:            `{"type":"response.create","model":"gpt-5.6-sol","input":"普通代码问题","stream":false}`,
+			firstFrameCloseExpected: true,
+			closeStatus:             coderws.StatusTryAgainLater,
+			closeReason:             "no available account",
+		})
+	})
+}
+
 func TestOpenAIResponsesWebSocket_ChannelMappedTargetSelectsAccountWithoutRequestedAlias(t *testing.T) {
 	got := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
 		firstPayload:  `{"type":"response.create","model":"public-alias","stream":false}`,
@@ -1931,6 +1956,8 @@ func newOpenAIWSHandlerTestServer(t *testing.T, h *OpenAIGatewayHandler, subject
 }
 
 type openAIResponsesWSUsageLogCase struct {
+	settingService         *service.SettingService
+	keywordRoutingEnabled  bool
 	simpleModeRejectAtRead int64
 	compositeResolver      *service.CompositeRouteResolver
 	accountPlatform        string
@@ -2974,6 +3001,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		account.Platform = tc.accountPlatform
 	}
 	account.RateMultiplier = tc.accountRateMultiplier
+	account.Extra[service.KeywordRoutingEnabledExtraKey] = tc.keywordRoutingEnabled
 	if strings.TrimSpace(tc.ingressMode) != "" {
 		account.Extra["openai_apikey_responses_websockets_v2_mode"] = tc.ingressMode
 	}
@@ -3037,7 +3065,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		nil,
 		channelSvc,
 		nil,
-		nil,
+		tc.settingService,
 		nil, // userPlatformQuotaRepo
 	)
 

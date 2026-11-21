@@ -479,6 +479,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 }
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
+	if err := ValidateKeywordRoutingExtra(input.Extra); err != nil {
+		return nil, err
+	}
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
 	if err != nil {
 		return nil, err
@@ -577,6 +580,17 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 }
 
 func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error) {
+	if err := ValidateKeywordRoutingExtra(input.Extra); err != nil {
+		return nil, err
+	}
+	// The table switch is a key-level update, preserving concurrent runtime and
+	// configuration fields instead of round-tripping the full extra object.
+	if len(input.Extra) == 1 && input.Extra[KeywordRoutingEnabledExtraKey] != nil && input.Name == "" && input.Notes == nil && input.Type == "" && input.Credentials == nil && input.ProxyID == nil && input.Concurrency == nil && input.Priority == nil && input.RateMultiplier == nil && input.LoadFactor == nil && input.Status == "" && input.GroupIDs == nil && input.ExpiresAt == nil && input.AutoPauseOnExpired == nil && input.ProbeEnabled == nil && input.RateSyncEnabled == nil {
+		if err := s.accountRepo.UpdateExtra(ctx, id, input.Extra); err != nil {
+			return nil, err
+		}
+		return s.accountRepo.GetByID(ctx, id)
+	}
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -691,6 +705,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		delete(normalizedExtra, grokObservedModelsExtraKey)
 		delete(normalizedExtra, UpstreamModelMetadataExtraKey)
 		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
+		if _, provided := normalizedExtra[KeywordRoutingEnabledExtraKey]; !provided {
+			if value, exists := account.Extra[KeywordRoutingEnabledExtraKey]; exists {
+				normalizedExtra[KeywordRoutingEnabledExtraKey] = value
+			}
+		}
 		for _, key := range []string{
 			"quota_used",
 			"quota_daily_used",
@@ -933,6 +952,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键
 // （如 model_rate_limits / passive_usage_* 等）。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	if err := ValidateKeywordRoutingExtra(updates); err != nil {
+		return err
+	}
 	updates = sanitizedCodexFingerprintExtraUpdates(updates)
 	updates = stripOpenAIAutoResetCreditManagedExtra(updates, true)
 	delete(updates, UpstreamBillingProbeEnabledExtraKey)
@@ -961,6 +983,9 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 // BulkUpdateAccounts updates multiple accounts in one request.
 // It merges credentials/extra keys instead of overwriting the whole object.
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
+	if err := ValidateKeywordRoutingExtra(input.Extra); err != nil {
+		return nil, err
+	}
 	// Managed probe/session state may only enter through dedicated typed endpoints.
 	input.Extra = sanitizedCodexFingerprintExtraUpdates(input.Extra)
 	input.Extra = stripOpenAIAutoResetCreditManagedExtra(input.Extra, true)

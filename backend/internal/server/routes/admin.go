@@ -46,6 +46,7 @@ func RegisterAdminRoutes(
 		registerGroupRoutes(admin, h)
 
 		// 账号管理
+		h.Admin.Account.SetKeywordRoutingSettings(settingService)
 		registerAccountRoutes(admin, h, stepUpAuth)
 
 		// 公告管理
@@ -363,6 +364,9 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 	accounts := admin.Group("/accounts")
 	{
 		accounts.GET("", h.Admin.Account.List)
+		accounts.GET("/keyword-routing", h.Admin.Account.GetKeywordRoutingConfig)
+		accounts.PUT("/keyword-routing", h.Admin.Account.SetKeywordRoutingConfig)
+		accounts.GET("/keyword-routing/stats/today", h.Admin.Account.GetKeywordRoutingTodayStats)
 		accounts.GET("/upstream-billing-rates", h.Admin.Account.GetUpstreamBillingRates)
 		accounts.GET("/upstream-billing-probe/settings", h.Admin.Account.GetUpstreamBillingProbeSettings)
 		accounts.PUT("/upstream-billing-probe/settings", h.Admin.Account.UpdateUpstreamBillingProbeSettings)

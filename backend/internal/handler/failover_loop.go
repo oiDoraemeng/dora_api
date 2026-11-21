@@ -141,6 +141,17 @@ type FailoverState struct {
 	profitVetoCount int
 }
 
+// A failed preferred-pool wait consumes the same account-switch budget as an
+// upstream failover, without pretending that an upstream request was sent.
+func (s *FailoverState) TryKeywordWaitFailover(ctx context.Context, account *service.Account) bool {
+	if !service.KeywordRoutingPrefersEnabled(ctx, account) || ctx.Err() != nil || s.SwitchCount >= s.MaxSwitches {
+		return false
+	}
+	s.FailedAccountIDs[account.ID] = struct{}{}
+	s.SwitchCount++
+	return true
+}
+
 // NewFailoverState 创建 failover 状态
 func NewFailoverState(maxSwitches int, hasBoundSession bool) *FailoverState {
 	return &FailoverState{

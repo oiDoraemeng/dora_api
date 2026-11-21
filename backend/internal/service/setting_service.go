@@ -117,6 +117,9 @@ type WebSearchManagerBuilder func(cfg *WebSearchEmulationConfig, proxyURLs map[i
 
 // SettingService 系统设置服务
 type SettingService struct {
+	keywordRoutingMu            sync.Mutex
+	keywordRoutingCache         atomic.Pointer[keywordRoutingRuntime]
+	keywordRoutingStats         KeywordRoutingStatsStore
 	scopedAdminKeyRepo          ScopedAdminKeyRepository
 	settingRepo                 SettingRepository
 	defaultSubGroupReader       DefaultSubscriptionGroupReader

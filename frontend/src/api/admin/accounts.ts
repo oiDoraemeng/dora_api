@@ -1134,7 +1134,32 @@ export async function refreshOpenCodeGoUsage(id: number): Promise<OpenCodeGoUsag
   return data
 }
 
+export interface KeywordRoutingConfig { keywords: string[] }
+export interface KeywordRoutingTodayStats {
+  date: string
+  timezone: string
+  checks: number
+  hits: number
+  groups: { group_id: number; checks: number; hits: number }[]
+  keywords: { keyword: string; hits: number }[]
+}
+export async function getKeywordRoutingConfig(): Promise<KeywordRoutingConfig> {
+  const { data } = await apiClient.get<KeywordRoutingConfig>('/admin/accounts/keyword-routing')
+  return data
+}
+export async function setKeywordRoutingConfig(config: KeywordRoutingConfig): Promise<KeywordRoutingConfig> {
+  const { data } = await apiClient.put<KeywordRoutingConfig>('/admin/accounts/keyword-routing', config)
+  return data
+}
+export async function getKeywordRoutingTodayStats(groupId?: number, signal?: AbortSignal): Promise<KeywordRoutingTodayStats> {
+  const { data } = await apiClient.get<KeywordRoutingTodayStats>('/admin/accounts/keyword-routing/stats/today', { params: { group_id: groupId }, signal })
+  return data
+}
+
 export const accountsAPI = {
+  getKeywordRoutingConfig,
+  setKeywordRoutingConfig,
+  getKeywordRoutingTodayStats,
   list,
   listWithEtag,
   getUpstreamBillingRatesWithEtag,

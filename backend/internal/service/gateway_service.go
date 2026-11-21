@@ -578,10 +578,11 @@ type AccountWaitPlan struct {
 }
 
 type AccountSelectionResult struct {
-	Account     *Account
-	Acquired    bool
-	ReleaseFunc func()
-	WaitPlan    *AccountWaitPlan // nil means no wait allowed
+	keywordPhase *keywordRoutingPhase
+	Account      *Account
+	Acquired     bool
+	ReleaseFunc  func()
+	WaitPlan     *AccountWaitPlan // nil means no wait allowed
 	// stickySessionHit 标记账号来自会话粘性绑定命中，供非高级调度路径回填决策标签。
 	stickySessionHit bool
 	// profitGate 携带本次选号真实生效的利润门（无门为 nil）。门安装在调度栈的
@@ -593,6 +594,10 @@ type AccountSelectionResult struct {
 // ProfitGateActive 报告本次选号是否处于利润门之下。
 func (r *AccountSelectionResult) ProfitGateActive() bool {
 	return r != nil && r.profitGate != nil
+}
+
+func (r *AccountSelectionResult) KeywordRoutingActive() bool {
+	return r != nil && r.keywordPhase != nil
 }
 
 // ClaudeUsage 表示Claude API返回的usage信息
@@ -977,6 +982,9 @@ func (s *GatewayService) BindStickySession(ctx context.Context, groupID *int64, 
 // only after the terminal post-slot check, otherwise a rejected candidate could
 // overwrite a healthy pre-existing sticky binding.
 func (s *GatewayService) bindGatewayStickySessionDuringSelection(ctx context.Context, groupID *int64, sessionHash string, accountID int64) error {
+	if _, active := ctx.Value(keywordRoutingPhaseKey{}).(keywordRoutingPhase); active {
+		return nil
+	}
 	if gatewayProfitControlGateActive(ctx) {
 		return nil
 	}
@@ -990,6 +998,9 @@ func (s *GatewayService) bindGatewayStickySessionDuringSelection(ctx context.Con
 // account remains bound and automatically becomes eligible again if its
 // account rate recovers.
 func (s *GatewayService) BindStickySessionAfterProfitAdmission(ctx context.Context, groupID *int64, sessionHash string, accountID int64) error {
+	if _, active := ctx.Value(keywordRoutingPhaseKey{}).(keywordRoutingPhase); active {
+		return s.BindStickySession(ctx, groupID, sessionHash, accountID)
+	}
 	if sessionHash == "" || accountID <= 0 || s.cache == nil {
 		return nil
 	}

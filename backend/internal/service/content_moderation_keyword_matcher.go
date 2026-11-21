@@ -12,10 +12,12 @@ type contentModerationKeywordMatcher struct {
 }
 
 type contentModerationKeywordNode struct {
-	failure     int32
-	bestKeyword int32
-	edgeStart   uint32
-	edgeCount   uint16
+	terminalKeyword int32
+	output          int32
+	failure         int32
+	bestKeyword     int32
+	edgeStart       uint32
+	edgeCount       uint16
 }
 
 type contentModerationKeywordEdge struct {
@@ -59,6 +61,7 @@ func newContentModerationKeywordMatcher(keywords []string) *contentModerationKey
 		}
 		if current := buildNodes[state].bestKeyword; current < 0 || int32(keywordIndex) < current {
 			buildNodes[state].bestKeyword = int32(keywordIndex)
+			buildNodes[state].terminalKeyword = int32(keywordIndex)
 		}
 	}
 
@@ -86,6 +89,11 @@ func newContentModerationKeywordMatcher(keywords []string) *contentModerationKey
 			}
 			if fallback >= 0 {
 				buildNodes[edge.target].failure = fallback
+			}
+			failureNode := buildNodes[buildNodes[edge.target].failure]
+			buildNodes[edge.target].output = failureNode.output
+			if failureNode.terminalKeyword >= 0 {
+				buildNodes[edge.target].output = buildNodes[edge.target].failure
 			}
 			buildNodes[edge.target].bestKeyword = minKeywordIndex(
 				buildNodes[edge.target].bestKeyword,
@@ -127,7 +135,7 @@ func newContentModerationKeywordMatcher(keywords []string) *contentModerationKey
 }
 
 func newContentModerationKeywordNode() contentModerationKeywordNode {
-	return contentModerationKeywordNode{bestKeyword: -1}
+	return contentModerationKeywordNode{bestKeyword: -1, terminalKeyword: -1}
 }
 
 func contentModerationKeywordBuildFirstEdge(node contentModerationKeywordNode) int32 {

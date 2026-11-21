@@ -16,6 +16,9 @@
             @refresh="handleManualRefresh"
             @create="showCreate = true"
           >
+            <template #before>
+              <button class="btn btn-secondary" @click="showKeywordRouting = true">{{ t('admin.accounts.keywordRouting.title') }}</button>
+            </template>
             <template #after>
               <!-- Auto Refresh Dropdown -->
               <div class="relative" ref="autoRefreshDropdownRef">
@@ -296,6 +299,11 @@
               <span class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out" :class="[row.schedulable ? 'translate-x-4' : 'translate-x-0']" />
             </button>
           </template>
+          <template #cell-keyword_routing="{ row }">
+            <button role="switch" :aria-checked="row.extra?.keyword_routing_enabled === true" :aria-label="t('admin.accounts.keywordRouting.title')" :title="t('admin.accounts.keywordRouting.switchHint')" :disabled="togglingKeywordRouting.has(row.id)" class="relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50" :class="row.extra?.keyword_routing_enabled === true ? 'bg-primary-500' : 'bg-gray-200 dark:bg-dark-600'" @click="handleToggleKeywordRouting(row)">
+              <span class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform" :class="row.extra?.keyword_routing_enabled === true ? 'translate-x-4' : 'translate-x-0'" />
+            </button>
+          </template>
           <template #cell-today_stats="{ row }">
             <AccountTodayStatsCell
               :stats="todayStatsByAccountId[String(row.id)] ?? null"
@@ -454,6 +462,7 @@
       </template>
       <template #pagination><Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" /></template>
     </TablePageLayout>
+    <KeywordRoutingModal :show="showKeywordRouting" :groups="groups" @close="showKeywordRouting = false" />
     <CreateAccountModal :show="showCreate" :proxies="proxies" :groups="groups" @close="showCreate = false" @created="reload" />
     <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="handleAccountUpdated" />
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
@@ -510,6 +519,7 @@ import Pagination from '@/components/common/Pagination.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { CreateAccountModal, EditAccountModal, BulkEditAccountModal, SyncFromCrsModal, TempUnschedStatusModal } from '@/components/account'
 import AccountTableActions from '@/components/admin/account/AccountTableActions.vue'
+import KeywordRoutingModal from '@/components/admin/account/KeywordRoutingModal.vue'
 import AccountTableFilters from '@/components/admin/account/AccountTableFilters.vue'
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
@@ -1431,6 +1441,7 @@ const shouldReplaceAutoRefreshRow = (current: Account, next: Account) => {
     current.current_window_cost !== next.current_window_cost ||
     current.active_sessions !== next.active_sessions ||
     current.schedulable !== next.schedulable ||
+    current.extra?.keyword_routing_enabled !== next.extra?.keyword_routing_enabled ||
     current.status !== next.status ||
     current.rate_limit_reset_at !== next.rate_limit_reset_at ||
     current.overload_until !== next.overload_until ||
@@ -1830,6 +1841,7 @@ const allColumns = computed(() => {
     { key: 'capacity', label: t('admin.accounts.columns.capacity'), sortable: false },
     { key: 'status', label: t('admin.accounts.columns.status'), sortable: true },
     { key: 'schedulable', label: t('admin.accounts.columns.schedulable'), sortable: true },
+    { key: 'keyword_routing', label: t('admin.accounts.keywordRouting.column'), sortable: false },
     { key: 'today_stats', label: t('admin.accounts.columns.todayStats'), sortable: false }
   ]
   if (!authStore.isSimpleMode) {
@@ -2491,6 +2503,23 @@ const confirmCreateSparkShadow = async () => {
 }
 const handleDelete = (a: Account) => { deletingAcc.value = a; showDeleteDialog.value = true }
 const confirmDelete = async () => { if(!deletingAcc.value) return; try { await adminAPI.accounts.delete(deletingAcc.value.id); showDeleteDialog.value = false; deletingAcc.value = null; reload() } catch (error) { console.error('Failed to delete account:', error) } }
+const showKeywordRouting = ref(false)
+const togglingKeywordRouting = reactive(new Set<number>())
+const handleToggleKeywordRouting = async (account: Account) => {
+  if (togglingKeywordRouting.has(account.id)) return
+  togglingKeywordRouting.add(account.id)
+  enterAutoRefreshSilentWindow()
+  try {
+    const updated = await adminAPI.accounts.update(account.id, { extra: { keyword_routing_enabled: account.extra?.keyword_routing_enabled !== true } })
+    patchAccountInList(updated)
+    resetAutoRefreshCache()
+    enterAutoRefreshSilentWindow()
+  } catch {
+    appStore.showError(t('admin.accounts.keywordRouting.toggleFailed'))
+  } finally {
+    togglingKeywordRouting.delete(account.id)
+  }
+}
 const handleToggleSchedulable = async (a: Account) => {
   const nextSchedulable = !a.schedulable
   togglingSchedulable.value = a.id

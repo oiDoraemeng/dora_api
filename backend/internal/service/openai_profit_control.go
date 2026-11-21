@@ -277,6 +277,9 @@ func attachSelectionProfitGate(ctx context.Context, sel *AccountSelectionResult)
 	if sel == nil {
 		return nil
 	}
+	if phase, ok := ctx.Value(keywordRoutingPhaseKey{}).(keywordRoutingPhase); ok {
+		sel.keywordPhase = &phase
+	}
 	if gate, ok := ctx.Value(openAIProfitControlGateCtxKey{}).(*openAIProfitControlGate); ok && gate != nil {
 		sel.profitGate = gate
 	}
@@ -288,6 +291,9 @@ func attachSelectionProfitGate(ctx context.Context, sel *AccountSelectionResult)
 // （ProfitControlVetoLatest / GatewayProfitControlVetoLatest）与准入后粘性
 // 绑定，否则这两步会因为看不到调度栈内安装的门而退化为空操作。
 func ContextWithSelectionProfitGate(ctx context.Context, sel *AccountSelectionResult) context.Context {
+	if sel != nil && sel.keywordPhase != nil {
+		ctx = context.WithValue(ctx, keywordRoutingPhaseKey{}, *sel.keywordPhase)
+	}
 	if sel == nil || sel.profitGate == nil {
 		return ctx
 	}
@@ -342,6 +348,9 @@ func (s *OpenAIGatewayService) ProfitControlVetoLatest(ctx context.Context, sele
 // only after the terminal post-slot check, so an account rejected after a rate
 // refresh cannot become the new sticky target.
 func (s *OpenAIGatewayService) bindOpenAIStickySessionDuringSelection(ctx context.Context, groupID *int64, sessionHash string, accountID int64) error {
+	if _, active := ctx.Value(keywordRoutingPhaseKey{}).(keywordRoutingPhase); active {
+		return nil
+	}
 	if gatewayProfitControlGateActive(ctx) || preserveOpenAIGuardianParentBinding(ctx, sessionHash) {
 		return nil
 	}
@@ -355,6 +364,9 @@ func (s *OpenAIGatewayService) bindOpenAIStickySessionDuringSelection(ctx contex
 // remains sticky and becomes eligible again automatically after its rate
 // recovers.
 func (s *OpenAIGatewayService) BindStickySessionAfterProfitAdmission(ctx context.Context, groupID *int64, sessionHash string, accountID int64) error {
+	if _, active := ctx.Value(keywordRoutingPhaseKey{}).(keywordRoutingPhase); active {
+		return s.BindStickySession(ctx, groupID, sessionHash, accountID)
+	}
 	if sessionHash == "" || accountID <= 0 {
 		return nil
 	}

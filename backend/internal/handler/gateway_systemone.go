@@ -63,6 +63,7 @@ func (h *GatewayHandler) SystemOne(c *gin.Context) {
 		h.errorResponse(c, status, "invalid_request_error", message)
 		return
 	}
+	c.Request = c.Request.WithContext(service.WithKeywordRoutingRequest(c.Request.Context(), service.ContentModerationProtocolTypeSafeSystemOne, body, apiKey.GroupID))
 	model, err := typesafe.ValidateSystemOneRequest(body)
 	if err != nil {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
@@ -172,6 +173,9 @@ func (h *GatewayHandler) SystemOne(c *gin.Context) {
 			accountRelease, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(c, account.ID, selection.WaitPlan.MaxConcurrency, selection.WaitPlan.Timeout, false, &streamStarted)
 			if err != nil {
 				reqLog.Warn("systemone.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+				if fs.TryKeywordWaitFailover(c.Request.Context(), account) {
+					continue
+				}
 				h.handleConcurrencyError(c, err, "account", false)
 				return
 			}
