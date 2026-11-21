@@ -43,13 +43,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	originalModel := ccReq.Model
 	clientStream := ccReq.Stream
 
-	// 2. Convert CC → Responses → Anthropic (chained conversion)
-	responsesReq, err := chatCompletionsToResponses(s.cfg, &ccReq)
-	if err != nil {
-		return nil, fmt.Errorf("convert chat completions to responses: %w", err)
-	}
-
-	// Resolve the final upstream model before model-specific conversion.
+	// 2. Resolve the upstream model before conversion and validation.
 	mappedModel := originalModel
 	if account.Type == AccountTypeAPIKey || account.Type == AccountTypeServiceAccount {
 		mappedModel = account.GetMappedModel(originalModel)
@@ -65,10 +59,19 @@ func (s *GatewayService) ForwardAsChatCompletions(
 			mappedModel = normalized
 		}
 	}
-	if err := validateClaude55Request(body, mappedModel); err != nil {
+	validationBody, adapted := adaptMappedHaiku55Request(body, originalModel, mappedModel)
+	if err := validateClaude55Request(validationBody, mappedModel); err != nil {
 		MarkClientErrorForRewrite(c)
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
+	}
+	if adapted {
+		ccReq.Temperature = nil
+		ccReq.TopP = nil
+	}
+	responsesReq, err := chatCompletionsToResponses(s.cfg, &ccReq)
+	if err != nil {
+		return nil, fmt.Errorf("convert chat completions to responses: %w", err)
 	}
 	responsesReq.Model = mappedModel
 	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(responsesReq)

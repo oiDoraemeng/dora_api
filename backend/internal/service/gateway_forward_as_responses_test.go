@@ -638,3 +638,33 @@ func TestClaude55BridgeUsesMappedModelBeforeThinkingConversion(t *testing.T) {
 		}
 	}
 }
+
+func TestMappedHaiku55BridgeAdaptsSampling(t *testing.T) {
+	const requested = "claude-opus-4-6"
+	const target = "claude-haiku-5-5"
+	for name, body := range map[string]string{
+		"chat/completions": `{"model":"claude-opus-4-6","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"high","temperature":0.5,"top_p":0.9}`,
+		"responses":        `{"model":"claude-opus-4-6","input":"hi","reasoning":{"effort":"high"},"temperature":0.5,"top_p":0.9}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/"+name, strings.NewReader(body))
+			upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(namespaceToolAnthropicStream()))}}
+			svc := &GatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+			account := &Account{ID: 1, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "fixture-key", "model_mapping": map[string]any{requested: target}}}
+			forward := svc.ForwardAsResponses
+			if name == "chat/completions" {
+				forward = svc.ForwardAsChatCompletions
+			}
+			result, err := forward(context.Background(), c, account, []byte(body), nil)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, target, gjson.GetBytes(upstream.lastBody, "model").String())
+			require.Equal(t, "adaptive", gjson.GetBytes(upstream.lastBody, "thinking.type").String())
+			require.False(t, gjson.GetBytes(upstream.lastBody, "temperature").Exists())
+			require.False(t, gjson.GetBytes(upstream.lastBody, "top_p").Exists())
+			require.Equal(t, requested, gjson.GetBytes(rec.Body.Bytes(), "model").String())
+		})
+	}
+}

@@ -76,10 +76,15 @@ func (s *GatewayService) ForwardAsResponses(
 			mappedModel = normalized
 		}
 	}
-	if err := validateClaude55Request(body, mappedModel); err != nil {
+	validationBody, adapted := adaptMappedHaiku55Request(body, originalModel, mappedModel)
+	if err := validateClaude55Request(validationBody, mappedModel); err != nil {
 		MarkClientErrorForRewrite(c)
 		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
+	}
+	if adapted {
+		responsesReq.Temperature = nil
+		responsesReq.TopP = nil
 	}
 	responsesReq.Model = mappedModel
 	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responsesReq)

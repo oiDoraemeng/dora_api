@@ -4,12 +4,16 @@ package service
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 // issue #7919：claude-haiku-5-5 请求校验（官方 migration guide 口径）。
@@ -57,9 +61,55 @@ func TestValidateClaude55Request_Haiku55(t *testing.T) {
 	}
 }
 
+func TestMappedHaiku55AdaptsLegacyMessagesParameters(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-5","thinking":{"type":"enabled","budget_tokens":8000},"output_config":{"effort":"high"},"temperature":0.5,"top_p":0.9,"top_k":20,"messages":[{"role":"user","content":"hi"}]}`)
+	target := "claude-haiku-5-5"
+	adapted, changed := adaptMappedHaiku55Request(body, "claude-sonnet-5", target)
+	require.True(t, changed)
+	require.NoError(t, validateClaude55Request(adapted, target))
+	require.Equal(t, "adaptive", gjson.GetBytes(adapted, "thinking.type").String())
+	require.Equal(t, "high", gjson.GetBytes(adapted, "output_config.effort").String())
+	require.Equal(t, "hi", gjson.GetBytes(adapted, "messages.0.content").String())
+	for _, field := range []string{"temperature", "top_p", "top_k", "thinking.budget_tokens"} {
+		require.False(t, gjson.GetBytes(adapted, field).Exists(), field)
+		require.True(t, gjson.GetBytes(body, field).Exists(), field)
+	}
+	for _, models := range [][2]string{{"claude-haiku-5.5", target}, {"claude-opus-4-6", "claude-sonnet-5-5"}} {
+		unmodified, changed := adaptMappedHaiku55Request(body, models[0], models[1])
+		require.False(t, changed)
+		require.Equal(t, body, unmodified)
+	}
+}
+
+func TestMappedHaiku55MessagesForwardAdaptsPayload(t *testing.T) {
+	const requested, target = "claude-sonnet-5", "claude-haiku-5-5"
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"claude-sonnet-5","max_tokens":16000,"thinking":{"type":"enabled","budget_tokens":8000},"temperature":0.5,"messages":[{"role":"user","content":"hi"}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"type":"message","model":"claude-haiku-5-5","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":5,"output_tokens":2}}`)),
+	}}
+	svc := &GatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := newAnthropicAPIKeyAccountForTest()
+	account.Credentials["model_mapping"] = map[string]any{requested: target}
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, target, gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Equal(t, "adaptive", gjson.GetBytes(upstream.lastBody, "thinking.type").String())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "temperature").Exists())
+}
+
 func TestForwardMappedClaude55ValidationMarksClientErrorForRewrite(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	body := []byte(`{"model":"public-model","temperature":0.5,"messages":[{"role":"user","content":"hi"}]}`)
+	body := []byte(`{"model":"public-model","temperature":"0.5","messages":[{"role":"user","content":"hi"}]}`)
 	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
 	require.NoError(t, err)
 

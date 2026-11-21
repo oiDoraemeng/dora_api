@@ -573,6 +573,34 @@ func isClaude55SignedThinkingModel(model string) bool {
 	return claude.IsOpus55(model) || claude.IsSonnet55(model) || claude.IsHaiku55(model)
 }
 
+// adaptMappedHaiku55Request translates settings that Haiku 5.5 cannot honor
+// when an account routes a different model to it. Direct Haiku requests still
+// use strict validation, including requests using a native Haiku 5.5 alias.
+func adaptMappedHaiku55Request(body []byte, requestedModel, targetModel string) ([]byte, bool) {
+	if !claude.IsHaiku55(targetModel) || claude.IsHaiku55(requestedModel) {
+		return body, false
+	}
+	out := body
+	changed := false
+	for _, field := range []string{"temperature", "top_p", "top_k"} {
+		value := gjson.GetBytes(out, field)
+		if value.Type != gjson.Number {
+			continue
+		}
+		if next, err := sjson.DeleteBytes(out, field); err == nil {
+			out, changed = next, true
+		}
+	}
+	if gjson.GetBytes(out, "thinking.type").String() == "enabled" {
+		if next, err := sjson.SetBytes(out, "thinking.type", "adaptive"); err == nil {
+			if next, err = sjson.DeleteBytes(next, "thinking.budget_tokens"); err == nil {
+				out, changed = next, true
+			}
+		}
+	}
+	return out, changed
+}
+
 // validateClaude55Request rejects settings that the upstream cannot honor.
 // Call before OAuth mimicry can remove tool_choice or alter thinking defaults.
 func validateClaude55Request(body []byte, model string) error {
