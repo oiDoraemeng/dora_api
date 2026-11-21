@@ -64,7 +64,7 @@ func TestValidateClaude55Request_Haiku55(t *testing.T) {
 func TestMappedHaiku55AdaptsLegacyMessagesParameters(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-5","thinking":{"type":"enabled","budget_tokens":8000},"output_config":{"effort":"high"},"temperature":0.5,"top_p":0.9,"top_k":20,"messages":[{"role":"user","content":"hi"}]}`)
 	target := "claude-haiku-5-5"
-	adapted, changed := adaptMappedHaiku55Request(body, "claude-sonnet-5", target)
+	adapted, changed := adaptClaude55Request(body, target)
 	require.True(t, changed)
 	require.NoError(t, validateClaude55Request(adapted, target))
 	require.Equal(t, "adaptive", gjson.GetBytes(adapted, "thinking.type").String())
@@ -74,11 +74,9 @@ func TestMappedHaiku55AdaptsLegacyMessagesParameters(t *testing.T) {
 		require.False(t, gjson.GetBytes(adapted, field).Exists(), field)
 		require.True(t, gjson.GetBytes(body, field).Exists(), field)
 	}
-	for _, models := range [][2]string{{"claude-haiku-5.5", target}, {"claude-opus-4-6", "claude-sonnet-5-5"}} {
-		unmodified, changed := adaptMappedHaiku55Request(body, models[0], models[1])
-		require.False(t, changed)
-		require.Equal(t, body, unmodified)
-	}
+	unmodified, changed := adaptClaude55Request(body, "claude-sonnet-5")
+	require.False(t, changed)
+	require.Equal(t, body, unmodified)
 }
 
 func TestMappedHaiku55MessagesForwardAdaptsPayload(t *testing.T) {

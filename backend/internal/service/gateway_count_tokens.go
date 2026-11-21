@@ -41,16 +41,15 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		}
 	}
 	if account != nil && account.Platform == PlatformAnthropic {
-		body, adapted := adaptMappedHaiku55Request(parsed.Body.Bytes(), parsed.Model, validationModel)
-		if err := validateClaude55Request(body, validationModel); err != nil {
+		adapted, err := adaptClaude55ParsedRequest(parsed, validationModel)
+		if err != nil {
+			return fmt.Errorf("adapt Claude token count request: %w", err)
+		}
+		parsed = adapted
+		if err := validateClaude55Request(parsed.Body.Bytes(), validationModel); err != nil {
 			MarkClientErrorForRewrite(c)
 			s.countTokensError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return err
-		}
-		if adapted {
-			if err := parsed.ReplaceBody(body); err != nil {
-				return fmt.Errorf("adapt mapped Haiku token count request: %w", err)
-			}
 		}
 	}
 

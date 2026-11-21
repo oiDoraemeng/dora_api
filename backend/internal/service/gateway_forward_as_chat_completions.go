@@ -59,15 +59,17 @@ func (s *GatewayService) ForwardAsChatCompletions(
 			mappedModel = normalized
 		}
 	}
-	validationBody, adapted := adaptMappedHaiku55Request(body, originalModel, mappedModel)
+	validationBody, adapted := adaptClaude55Request(body, mappedModel)
 	if err := validateClaude55Request(validationBody, mappedModel); err != nil {
 		MarkClientErrorForRewrite(c)
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
 	if adapted {
-		ccReq.Temperature = nil
-		ccReq.TopP = nil
+		ccReq = apicompat.ChatCompletionsRequest{}
+		if err := json.Unmarshal(validationBody, &ccReq); err != nil {
+			return nil, fmt.Errorf("parse adapted chat completions request: %w", err)
+		}
 	}
 	responsesReq, err := chatCompletionsToResponses(s.cfg, &ccReq)
 	if err != nil {

@@ -573,32 +573,86 @@ func isClaude55SignedThinkingModel(model string) bool {
 	return claude.IsOpus55(model) || claude.IsSonnet55(model) || claude.IsHaiku55(model)
 }
 
-// adaptMappedHaiku55Request translates settings that Haiku 5.5 cannot honor
-// when an account routes a different model to it. Direct Haiku requests still
-// use strict validation, including requests using a native Haiku 5.5 alias.
-func adaptMappedHaiku55Request(body []byte, requestedModel, targetModel string) ([]byte, bool) {
-	if !claude.IsHaiku55(targetModel) || claude.IsHaiku55(requestedModel) {
+// adaptClaude55Request uses the final account model for both direct and mapped
+// requests. It never changes the client model, tools, messages or signed history.
+func adaptClaude55Request(body []byte, targetModel string) ([]byte, bool) {
+	if !isClaude55SignedThinkingModel(targetModel) {
 		return body, false
 	}
 	out := body
 	changed := false
-	for _, field := range []string{"temperature", "top_p", "top_k"} {
-		value := gjson.GetBytes(out, field)
-		if value.Type != gjson.Number {
-			continue
-		}
-		if next, err := sjson.DeleteBytes(out, field); err == nil {
+	set := func(path string, value any) {
+		if next, err := sjson.SetBytes(out, path, value); err == nil {
 			out, changed = next, true
 		}
 	}
-	if gjson.GetBytes(out, "thinking.type").String() == "enabled" {
-		if next, err := sjson.SetBytes(out, "thinking.type", "adaptive"); err == nil {
-			if next, err = sjson.DeleteBytes(next, "thinking.budget_tokens"); err == nil {
-				out, changed = next, true
+	drop := func(path string) {
+		if !gjson.GetBytes(out, path).Exists() {
+			return
+		}
+		if next, err := sjson.DeleteBytes(out, path); err == nil {
+			out, changed = next, true
+		}
+	}
+	if claude.IsSonnet55(targetModel) || claude.IsHaiku55(targetModel) {
+		for _, field := range []string{"temperature", "top_p", "top_k"} {
+			// Keep malformed values for validation rather than hiding bad types.
+			if gjson.GetBytes(out, field).Type == gjson.Number {
+				drop(field)
 			}
 		}
 	}
+	effort := gjson.GetBytes(out, "output_config.effort").String()
+	highEffort := effort == "xhigh" || effort == "max"
+	switch gjson.GetBytes(out, "thinking.type").String() {
+	case "enabled":
+		set("thinking.type", "adaptive")
+	case "disabled":
+		if claude.IsSonnet55(targetModel) && !highEffort {
+			set("thinking.type", "between_tools")
+		} else if !claude.IsHaiku55(targetModel) || highEffort {
+			set("thinking.type", "adaptive")
+			if effort == "" {
+				set("output_config.effort", "low")
+			}
+		}
+	case "between_tools":
+		if claude.IsHaiku55(targetModel) && !highEffort {
+			set("thinking.type", "disabled")
+		} else if !claude.IsSonnet55(targetModel) || highEffort {
+			set("thinking.type", "adaptive")
+			if effort == "" {
+				set("output_config.effort", "low")
+			}
+		}
+	}
+	switch gjson.GetBytes(out, "thinking.type").String() {
+	case "adaptive", "between_tools", "disabled":
+		drop("thinking.budget_tokens")
+	}
+	if gjson.GetBytes(out, "thinking.type").String() == "between_tools" {
+		drop("thinking.display")
+		drop("thinking.block_binding")
+	}
 	return out, changed
+}
+
+// Adapt an isolated attempt so a later account can still use the original
+// sampling settings and thinking mode with a different mapped model.
+func adaptClaude55ParsedRequest(parsed *ParsedRequest, model string) (*ParsedRequest, error) {
+	body, changed := adaptClaude55Request(parsed.Body.Bytes(), model)
+	if !changed {
+		return parsed, nil
+	}
+	clone, err := parsed.CloneForBody(body)
+	if err != nil {
+		return nil, err
+	}
+	clone.OnUpstreamAccepted = parsed.OnUpstreamAccepted
+	t := gjson.GetBytes(body, "thinking.type").String()
+	clone.ThinkingEnabled = t == "enabled" || t == "adaptive" || t == "between_tools"
+	clone.OutputEffort = gjson.GetBytes(body, "output_config.effort").String()
+	return clone, nil
 }
 
 // validateClaude55Request rejects settings that the upstream cannot honor.

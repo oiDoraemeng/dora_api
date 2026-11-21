@@ -105,16 +105,14 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 	}
 	if account != nil && account.Platform == PlatformAnthropic {
-		body, adapted := adaptMappedHaiku55Request(parsed.Body.Bytes(), parsed.Model, validationModel)
-		if err := validateClaude55Request(body, validationModel); err != nil {
+		parsed, err = adaptClaude55ParsedRequest(parsed, validationModel)
+		if err != nil {
+			return nil, fmt.Errorf("adapt Claude request: %w", err)
+		}
+		if err := validateClaude55Request(parsed.Body.Bytes(), validationModel); err != nil {
 			MarkClientErrorForRewrite(c)
 			c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "invalid_request_error", "message": err.Error()}})
 			return nil, err
-		}
-		if adapted {
-			if err := parsed.ReplaceBody(body); err != nil {
-				return nil, fmt.Errorf("adapt mapped Haiku request: %w", err)
-			}
 		}
 	}
 	// Anthropic Fast is requested with speed=fast rather than OpenAI's
