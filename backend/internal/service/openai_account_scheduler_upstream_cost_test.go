@@ -166,20 +166,20 @@ func TestAdvancedSchedulerCapsRejectedCostOverflowAcquires(t *testing.T) {
 	require.Equal(t, openAIAccountSelectionProbeLimit, cache.totalAcquires())
 }
 
-func TestOpenAICostOverflowExpandedOnlyWhenCostAddsCandidates(t *testing.T) {
+func TestOpenAISelectionOverflowExpandedOnlyWhenPlanAddsCandidates(t *testing.T) {
 	candidates := []openAIAccountCandidateScore{
 		{account: &Account{ID: 1, Extra: map[string]any{"openai_compact_supported": true}}},
 		{account: &Account{ID: 2}},
 	}
 	plan := openAIAccountLoadPlan{candidates: candidates, topK: 1, includeOverflowFallback: true}
-	require.True(t, openAICostOverflowExpanded(OpenAIAccountScheduleRequest{}, plan))
-	require.False(t, openAICostOverflowExpanded(OpenAIAccountScheduleRequest{RequireCompact: true}, plan),
+	require.True(t, openAISelectionOverflowExpanded(OpenAIAccountScheduleRequest{}, plan))
+	require.False(t, openAISelectionOverflowExpanded(OpenAIAccountScheduleRequest{RequireCompact: true}, plan),
 		"one candidate per compact tier does not expand either tier's top-k")
 	plan.topK = len(candidates)
-	require.False(t, openAICostOverflowExpanded(OpenAIAccountScheduleRequest{}, plan))
+	require.False(t, openAISelectionOverflowExpanded(OpenAIAccountScheduleRequest{}, plan))
 	plan.includeOverflowFallback = false
 	plan.topK = 1
-	require.False(t, openAICostOverflowExpanded(OpenAIAccountScheduleRequest{}, plan))
+	require.False(t, openAISelectionOverflowExpanded(OpenAIAccountScheduleRequest{}, plan))
 }
 
 func TestAdvancedSchedulerKnownFullOverflowStillFindsAvailableAccount(t *testing.T) {
@@ -822,7 +822,7 @@ func TestBuildOpenAIAccountLoadPlanUsesCostOnlyForTokenScope(t *testing.T) {
 	otherPlan := scheduler.buildOpenAIAccountLoadPlan(context.Background(), OpenAIAccountScheduleRequest{}, accounts, loadMap)
 	require.Equal(t, otherPlan.candidates[0].score, otherPlan.candidates[1].score)
 	require.Equal(t, otherPlan.candidates[1].score, otherPlan.candidates[2].score)
-	require.False(t, otherPlan.includeOverflowFallback)
+	require.True(t, otherPlan.includeOverflowFallback)
 }
 
 func TestBuildOpenAIAccountSchedulerScoreSnapshotUpstreamCostIsExactNoOpWithoutSignal(t *testing.T) {

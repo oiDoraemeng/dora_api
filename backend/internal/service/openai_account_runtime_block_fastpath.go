@@ -215,6 +215,32 @@ func shouldCooldownOpenAITransientUpstreamError(statusCode int, responseBody []b
 	}
 }
 
+// RecordOpenAIAccountRetryExhausted is called only after the request-local
+// retry budget is spent. Pool retries stay available within a request, while
+// repeated exhausted requests cool down just this account's upstream model.
+func (s *OpenAIGatewayService) RecordOpenAIAccountRetryExhausted(account *Account, canonicalModel string, failoverErr *UpstreamFailoverError) {
+	if s == nil || account == nil || account.Platform != PlatformOpenAI || account.Type != AccountTypeAPIKey ||
+		!account.IsPoolMode() || account.IsCustomErrorCodesEnabled() || failoverErr == nil || !failoverErr.RetryableOnSameAccount ||
+		failoverErr.IsCredentialFailure() || failoverErr.RequestScopedTransient ||
+		failoverErr.Scope == GatewayFailureScopeRequest || failoverErr.Scope == GatewayFailureScopeProvider {
+		return
+	}
+	if failoverErr.StatusCode != http.StatusTooManyRequests &&
+		!shouldCooldownOpenAITransientUpstreamError(failoverErr.StatusCode, failoverErr.ResponseBody) {
+		return
+	}
+	decision := s.recordOpenAIAccountModelTransientFailure(account, canonicalModel, time.Now())
+	if decision.Cooldown > 0 {
+		slog.Warn("openai.pool_retry_exhausted_model_cooldown",
+			"account_id", account.ID,
+			"model", openAIAccountModelTransientModel(canonicalModel),
+			"upstream_status", failoverErr.StatusCode,
+			"failure_streak", decision.FailureStreak,
+			"cooldown_ms", decision.Cooldown.Milliseconds(),
+		)
+	}
+}
+
 func (s *OpenAIGatewayService) markOpenAIOAuth429RateLimited(ctx context.Context, account *Account, headers http.Header, responseBody []byte) {
 	if s == nil || !isOpenAIOAuthAccount(account) {
 		return

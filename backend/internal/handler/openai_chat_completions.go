@@ -371,6 +371,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 							continue
 						}
 					}
+					h.gatewayService.RecordOpenAIAccountRetryExhausted(account, openAIAccountScheduleModel(c, account, reqModel, false, nil), failoverErr)
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr

@@ -30,8 +30,7 @@ const (
 const (
 	openAIAdvancedSchedulerSettingCacheTTL  = 5 * time.Second
 	openAIAdvancedSchedulerSettingDBTimeout = 2 * time.Second
-	// ponytail: cap probes added when cost ordering expands configured Top-K;
-	// use bulk acquisition if a measured workload needs a higher ceiling.
+	// Bound slot/DB probes when falling back beyond the preferred Top-K.
 	openAIAccountSelectionProbeLimit = 64
 )
 
@@ -90,8 +89,10 @@ type OpenAIAccountScheduleRequest struct {
 	RequiredImageCapability OpenAIImagesCapability
 	// RequireCompact is only for legacy /responses/compact capability filtering
 	// and compact_model_mapping; native remote compaction v2 leaves it false.
-	RequireCompact bool
-	ExcludedIDs    map[int64]struct{}
+	RequireCompact  bool
+	ExcludedIDs     map[int64]struct{}
+	selectionNonce  uint64
+	escapedStickyID int64
 }
 
 type OpenAIAccountScheduleDecision struct {
@@ -299,6 +300,7 @@ type defaultOpenAIAccountScheduler struct {
 	service                *OpenAIGatewayService
 	metrics                openAIAccountSchedulerMetrics
 	stats                  *openAIAccountRuntimeStats
+	selectionSequence      atomic.Uint64
 	grokFreeQuotaGateCache sync.Map // key: int64(accountID), value: grokFreeQuotaGateCacheEntry
 }
 
@@ -466,6 +468,10 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		}
 		if escapedSticky {
 			req.PreserveStickyBinding = true
+			req.escapedStickyID = req.StickyAccountID
+			if req.escapedStickyID == 0 && s.service.cache != nil {
+				req.escapedStickyID, _ = s.service.getStickySessionAccountID(ctx, req.GroupID, req.SessionHash)
+			}
 		}
 	}
 
@@ -791,6 +797,7 @@ func deriveOpenAISelectionSeed(req OpenAIAccountScheduleRequest) uint64 {
 	}
 
 	seed := hasher.Sum64()
+	seed ^= req.selectionNonce * 0x9e3779b97f4a7c15
 	// 对“无会话锚点”的纯负载均衡请求引入时间熵，避免固定命中同一账号。
 	if strings.TrimSpace(req.SessionHash) == "" && strings.TrimSpace(req.PreviousResponseID) == "" {
 		seed ^= uint64(time.Now().UnixNano())
@@ -901,6 +908,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 		candidates:                candidates,
 		staleSnapshotCompactRetry: staleSnapshotCompactRetry,
 		candidateCount:            len(candidates),
+		includeOverflowFallback:   true,
 	}
 	if len(candidates) == 0 {
 		plan.selectionOrder = s.buildOpenAISelectionOrder(req, plan)
@@ -953,12 +961,6 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 			accounts = append(accounts, candidate.account)
 		}
 		upstreamCostFactors = openAIUpstreamCostFactors(accounts, now, s.service.openAIOAuthSchedulingRateMultiplier(ctx))
-		for _, factor := range upstreamCostFactors {
-			if factor != openAIUpstreamCostNeutralFactor {
-				plan.includeOverflowFallback = true
-				break
-			}
-		}
 	}
 
 	// Reset 因子（use-it-or-lose-it）：优先读取 Codex 5h 重置时间，回退到会话窗口。
@@ -1059,6 +1061,18 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 		if len(pool) == 0 || plan.topK <= 0 {
 			return nil
 		}
+		var escaped []openAIAccountCandidateScore
+		if req.escapedStickyID > 0 && len(pool) > 1 {
+			preferred := make([]openAIAccountCandidateScore, 0, len(pool))
+			for _, candidate := range pool {
+				if candidate.account.ID == req.escapedStickyID {
+					escaped = append(escaped, candidate)
+				} else {
+					preferred = append(preferred, candidate)
+				}
+			}
+			pool = preferred
+		}
 		groupTopK := plan.topK
 		if groupTopK > len(pool) {
 			groupTopK = len(pool)
@@ -1086,7 +1100,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 			primary = buildOpenAIWeightedSelectionOrder(ranked, req)
 		}
 		if !plan.includeOverflowFallback || groupTopK >= len(pool) {
-			return primary
+			return append(primary, escaped...)
 		}
 
 		selected := make(map[int64]struct{}, len(primary))
@@ -1102,7 +1116,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 		sort.Slice(overflow, func(i, j int) bool {
 			return isOpenAIAccountCandidateBetter(overflow[i], overflow[j])
 		})
-		return append(primary, overflow...)
+		return append(append(primary, overflow...), escaped...)
 	}
 
 	if req.RequireCompact {
@@ -1401,6 +1415,9 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	ctx context.Context,
 	req OpenAIAccountScheduleRequest,
 ) (*AccountSelectionResult, int, int, float64, error) {
+	// Session affinity is handled before this layer. Concurrent spillovers
+	// from the same session must not all replay the same weighted ordering.
+	req.selectionNonce = s.selectionSequence.Add(1)
 	budget := newOpenAISelectionProbeBudget()
 	accounts, err := s.service.listSchedulableAccounts(ctx, req.GroupID, req.Platform)
 	if err != nil {
@@ -1564,7 +1581,7 @@ func (s *defaultOpenAIAccountScheduler) trySelectByLoadBalancePool(
 	budget *openAISelectionProbeBudget,
 ) openAIAccountLoadSelectionAttempt {
 	plan := s.buildOpenAIAccountLoadPlan(ctx, req, filtered, loadMap)
-	if openAICostOverflowExpanded(req, plan) {
+	if openAISelectionOverflowExpanded(req, plan) {
 		budget.enableLimit()
 	}
 	attempt := openAIAccountLoadSelectionAttempt{
@@ -1603,7 +1620,7 @@ func (s *defaultOpenAIAccountScheduler) trySelectByLoadBalancePool(
 		loadReq := buildOpenAIAccountLoadRequest(filtered)
 		if freshLoadMap, loadErr := s.service.concurrencyService.GetAccountsLoadBatchFresh(ctx, loadReq); loadErr == nil {
 			freshPlan := s.buildOpenAIAccountLoadPlan(ctx, req, filtered, freshLoadMap)
-			if openAICostOverflowExpanded(req, freshPlan) {
+			if openAISelectionOverflowExpanded(req, freshPlan) {
 				budget.enableLimit()
 			}
 			if len(freshPlan.selectionOrder) > 0 {
@@ -1632,7 +1649,7 @@ func (s *defaultOpenAIAccountScheduler) trySelectByLoadBalancePool(
 	return attempt
 }
 
-func openAICostOverflowExpanded(req OpenAIAccountScheduleRequest, plan openAIAccountLoadPlan) bool {
+func openAISelectionOverflowExpanded(req OpenAIAccountScheduleRequest, plan openAIAccountLoadPlan) bool {
 	if !plan.includeOverflowFallback || plan.topK <= 0 {
 		return false
 	}

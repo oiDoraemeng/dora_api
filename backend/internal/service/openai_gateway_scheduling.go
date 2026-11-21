@@ -1471,6 +1471,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	if requireCompact {
 		candidates = prioritizeOpenAICompactAccounts(candidates)
 	}
+	var waitAccount *Account
 	for _, acc := range candidates {
 		fresh := s.resolveFreshSchedulableOpenAIAccount(ctx, acc, platform, requestedModel, false, requiredCapability)
 		if fresh == nil {
@@ -1483,9 +1484,30 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, fresh, requestedModel, requireCompact) {
 			continue
 		}
-		return s.newSelectionResult(ctx, fresh, false, nil, &AccountWaitPlan{
-			AccountID:      fresh.ID,
-			MaxConcurrency: fresh.Concurrency,
+		if waitAccount == nil {
+			waitAccount = fresh
+		}
+		// The load factor is a soft balancing target. Exhausting it must not
+		// queue behind one account while another still has hard slot capacity.
+		if load := loadMap[fresh.ID]; load != nil && fresh.Concurrency > 0 && load.CurrentConcurrency >= fresh.Concurrency {
+			continue
+		}
+		result, acquireErr := s.tryAcquireAccountSlot(ctx, fresh.ID, fresh.Concurrency)
+		if acquireErr == nil && result != nil && result.Acquired {
+			selection, selectErr := s.newAcquiredSelectionResult(ctx, fresh, result.ReleaseFunc)
+			if selectErr != nil {
+				return nil, selectErr
+			}
+			if sessionHash != "" && !stickySpillover && !gatewayProfitControlGateActive(ctx) {
+				_ = s.setStickySessionAccountID(ctx, groupID, sessionHash, fresh.ID, openaiStickySessionTTL)
+			}
+			return selection, nil
+		}
+	}
+	if waitAccount != nil {
+		return s.newSelectionResult(ctx, waitAccount, false, nil, &AccountWaitPlan{
+			AccountID:      waitAccount.ID,
+			MaxConcurrency: waitAccount.Concurrency,
 			Timeout:        cfg.FallbackWaitTimeout,
 			MaxWaiting:     cfg.FallbackMaxWaiting,
 		})

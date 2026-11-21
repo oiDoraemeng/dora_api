@@ -934,6 +934,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 							continue
 						}
 					}
+					h.gatewayService.RecordOpenAIAccountRetryExhausted(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, nil), failoverErr)
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
@@ -1502,6 +1503,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 							continue
 						}
 					}
+					h.gatewayService.RecordOpenAIAccountRetryExhausted(account, openAIAccountScheduleModel(c, account, currentRoutingModel, false, nil), failoverErr)
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
@@ -2753,6 +2755,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		if ctx.Err() != nil {
 			return false
 		}
+		h.gatewayService.RecordOpenAIAccountRetryExhausted(account, openAIAccountScheduleModel(c, account, wsForwardModel, false, nil), failoverErr)
 		h.gatewayService.RecordOpenAIAccountSwitch()
 		failedAccountIDs[account.ID] = struct{}{}
 		lastFailoverErr = failoverErr
