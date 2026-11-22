@@ -195,8 +195,14 @@ type openAIAccountRuntimeStats struct {
 }
 
 type openAIAccountRuntimeStat struct {
+	reportMu          sync.Mutex
 	errorRateEWMABits atomic.Uint64
 	ttftEWMABits      atomic.Uint64
+	resultAt          atomic.Int64
+	ttftAt            atomic.Int64
+	selectedAt        atomic.Int64
+	recoveryAt        atomic.Int64
+	recoveryInFlight  atomic.Bool
 }
 
 func newOpenAIAccountRuntimeStats() *openAIAccountRuntimeStats {
@@ -237,21 +243,34 @@ func updateEWMAAtomic(target *atomic.Uint64, sample float64, alpha float64) {
 }
 
 func (s *openAIAccountRuntimeStats) report(accountID int64, success bool, firstTokenMs *int) {
+	s.reportAt(accountID, success, firstTokenMs, time.Now())
+}
+
+func (s *openAIAccountRuntimeStats) reportAt(accountID int64, success bool, firstTokenMs *int, now time.Time) {
 	if s == nil || accountID <= 0 {
 		return
 	}
 	const alpha = 0.2
 	stat := s.loadOrCreate(accountID)
+	stat.reportMu.Lock()
+	defer stat.reportMu.Unlock()
+	// Age the prior before adding a new result too: a successful recovery must
+	// not bring the entire old failure history back at full strength.
+	previous := math.Float64frombits(stat.errorRateEWMABits.Load())
+	previous = openAIAgedErrorRate(previous, stat.resultAt.Load(), now)
+	stat.errorRateEWMABits.Store(math.Float64bits(previous))
 
 	errorSample := 1.0
 	if success {
 		errorSample = 0.0
 	}
 	updateEWMAAtomic(&stat.errorRateEWMABits, errorSample, alpha)
+	stat.resultAt.Store(now.UnixNano())
 
 	if firstTokenMs != nil && *firstTokenMs > 0 {
 		ttft := float64(*firstTokenMs)
 		ttftBits := math.Float64bits(ttft)
+		ttftAlpha := 1 - (1-alpha)*openAIStatsConfidence(stat.ttftAt.Load(), now)
 		for {
 			oldBits := stat.ttftEWMABits.Load()
 			oldValue := math.Float64frombits(oldBits)
@@ -261,11 +280,12 @@ func (s *openAIAccountRuntimeStats) report(accountID int64, success bool, firstT
 				}
 				continue
 			}
-			newValue := alpha*ttft + (1-alpha)*oldValue
+			newValue := ttftAlpha*ttft + (1-ttftAlpha)*oldValue
 			if stat.ttftEWMABits.CompareAndSwap(oldBits, math.Float64bits(newValue)) {
 				break
 			}
 		}
+		stat.ttftAt.Store(now.UnixNano())
 	}
 }
 
@@ -391,6 +411,9 @@ func (s *defaultOpenAIAccountScheduler) Select(
 	start := time.Now()
 	// 命名返回值保证 defer 写入的耗时同时返回给调用方。
 	defer func() {
+		if err == nil && selection != nil && selection.Acquired && selection.Account != nil && s.stats != nil {
+			s.stats.markSelected(selection.Account.ID, time.Now())
+		}
 		decision.LatencyMs = time.Since(start).Milliseconds()
 		s.metrics.recordSelect(decision)
 	}()
@@ -660,14 +683,16 @@ func (s *defaultOpenAIAccountScheduler) shouldEscapeStickyAccount(accountID int6
 }
 
 type openAIAccountCandidateScore struct {
-	account   *Account
-	loadInfo  *AccountLoadInfo
-	loadKnown bool
-	score     float64
-	priority  int
-	errorRate float64
-	ttft      float64
-	hasTTFT   bool
+	account         *Account
+	loadInfo        *AccountLoadInfo
+	loadKnown       bool
+	score           float64
+	priority        int
+	errorRate       float64
+	ttft            float64
+	hasTTFT         bool
+	ttftStaleWeight float64
+	recovery        bool
 }
 
 type openAIAccountCandidateHeap []openAIAccountCandidateScore
@@ -869,6 +894,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 	filtered []*Account,
 	loadMap map[int64]*AccountLoadInfo,
 ) openAIAccountLoadPlan {
+	now := time.Now()
 	allCandidates := make([]openAIAccountCandidateScore, 0, len(filtered))
 	for _, account := range filtered {
 		loadInfo, loadKnown := loadMap[account.ID]
@@ -877,16 +903,18 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 			loadKnown = false
 		}
 		errorRate, ttft, hasTTFT := 0.0, 0.0, false
+		ttftStaleWeight := 0.0
 		if s.stats != nil {
-			errorRate, ttft, hasTTFT = s.stats.snapshot(account.ID)
+			errorRate, ttft, hasTTFT, ttftStaleWeight = s.stats.schedulingSnapshot(account.ID, now)
 		}
 		allCandidates = append(allCandidates, openAIAccountCandidateScore{
-			account:   account,
-			loadInfo:  loadInfo,
-			loadKnown: loadKnown,
-			errorRate: errorRate,
-			ttft:      ttft,
-			hasTTFT:   hasTTFT,
+			account:         account,
+			loadInfo:        loadInfo,
+			loadKnown:       loadKnown,
+			errorRate:       errorRate,
+			ttft:            ttft,
+			hasTTFT:         hasTTFT,
+			ttftStaleWeight: ttftStaleWeight,
 		})
 	}
 
@@ -953,7 +981,6 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 	plan.loadSkew = calcLoadSkewByMoments(loadRateSum, loadRateSumSquares, len(candidates))
 
 	weights := s.service.openAIWSSchedulerWeightsForRequest(ctx)
-	now := time.Now()
 	upstreamCostFactors := map[int64]float64(nil)
 	if req.UseUpstreamTokenCost && weights.UpstreamCost > 0 {
 		accounts := make([]*Account, 0, len(candidates))
@@ -1002,6 +1029,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 		if item.hasTTFT && hasTTFTSample && maxTTFT > minTTFT {
 			ttftFactor = 1 - clamp01((item.ttft-minTTFT)/(maxTTFT-minTTFT))
 		}
+		ttftFactor = 0.5 + (ttftFactor-0.5)*(1-item.ttftStaleWeight)
 		resetFactor := 0.0
 		if weights.Reset > 0 && hasResetSample {
 			if end, ok := openAISchedulingResetWindowEnd(item.account, now); ok {
@@ -1116,7 +1144,8 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 		sort.Slice(overflow, func(i, j int) bool {
 			return isOpenAIAccountCandidateBetter(overflow[i], overflow[j])
 		})
-		return append(append(primary, overflow...), escaped...)
+		order := append(append(primary, overflow...), escaped...)
+		return s.promoteOpenAIRecoveryCandidate(req, order, len(primary))
 	}
 
 	if req.RequireCompact {
@@ -1202,6 +1231,39 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 		if candidate.loadKnown && candidate.account.Concurrency > 0 &&
 			candidate.loadInfo.CurrentConcurrency >= candidate.account.Concurrency {
 			continue
+		}
+		if candidate.recovery {
+			releaseRecovery, ok := s.stats.beginRecovery(candidate.account.ID, time.Now())
+			candidate.recovery = false
+			if !ok {
+				// Keep hard-capacity overflow available, without allowing a lost
+				// recovery reservation to bypass the preferred healthy pool.
+				selectionOrder = append(selectionOrder, candidate)
+				continue
+			}
+			recoveryReq := req
+			recoveryReq.PreserveStickyBinding = true
+			result, blocked, err := s.tryAcquireOpenAISelectionOrderWithBudget(ctx, recoveryReq, []openAIAccountCandidateScore{candidate}, budget)
+			compactBlocked = compactBlocked || blocked
+			if err != nil || result == nil {
+				releaseRecovery()
+				if err != nil {
+					return nil, compactBlocked, err
+				}
+				continue
+			}
+			releaseSlot := result.ReleaseFunc
+			var once sync.Once
+			result.ReleaseFunc = func() {
+				once.Do(func() {
+					if releaseSlot != nil {
+						releaseSlot()
+					}
+					releaseRecovery()
+				})
+			}
+			slog.Info("openai.scheduler_recovery_selected", "account_id", candidate.account.ID, "group_id", req.GroupID, "model", req.RequestedModel)
+			return result, compactBlocked, nil
 		}
 
 		result, attempted, acquireErr := s.tryAcquireOpenAIAccountSlot(ctx, candidate.account.ID, candidate.account.Concurrency, budget)
