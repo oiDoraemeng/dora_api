@@ -520,6 +520,12 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		}
 	}
 
+	// A busy Anthropic API-key binding is a preference, not a reason to leave
+	// another eligible account idle. Keep its wait plan until all immediately
+	// available capacity has been tried. OAuth, native Gemini and routed sticky
+	// sessions retain their existing affinity behavior.
+	var stickyWaitAccount *Account
+	var stickyWaitPlan *AccountWaitPlan
 	// ============ Layer 1.5: 粘性会话（仅在无模型路由配置时生效） ============
 	if len(routingAccountIDs) == 0 && sessionHash != "" && stickyAccountID > 0 && !isExcluded(stickyAccountID) {
 		accountID := stickyAccountID
@@ -605,12 +611,17 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 								"session", shortSessionHash(sessionHash),
 								"result", "wait_plan",
 							)
-							return s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
+							plan := &AccountWaitPlan{
 								AccountID:      accountID,
 								MaxConcurrency: account.Concurrency,
 								Timeout:        cfg.StickySessionWaitTimeout,
 								MaxWaiting:     cfg.StickySessionMaxWaiting,
-							})
+							}
+							if err == nil && platform == PlatformAnthropic && account.Type == AccountTypeAPIKey && len(accounts) > 1 {
+								stickyWaitAccount, stickyWaitPlan = account, plan
+							} else {
+								return s.newSelectionResult(ctx, account, false, nil, plan)
+							}
 						}
 					}
 				} else if !clearSticky {
@@ -694,6 +705,9 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	}
 
 	if len(candidates) == 0 {
+		if stickyWaitPlan != nil {
+			return s.newSelectionResult(ctx, stickyWaitAccount, false, nil, stickyWaitPlan)
+		}
 		if channelRestrictedCount > 0 {
 			slog.Warn("channel pricing restriction blocked request",
 				"group_id", derefGroupID(groupID),
@@ -760,6 +774,9 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					if sessionHash != "" && s.cache != nil {
 						_ = s.bindGatewayStickySessionDuringSelection(ctx, groupID, sessionHash, selected.account.ID)
 					}
+					if stickyWaitAccount != nil && selected.account.ID != stickyWaitAccount.ID {
+						slog.Info("gateway.busy_sticky_spillover_selected", "group_id", derefGroupID(groupID), "account_id", selected.account.ID, "busy_account_id", stickyWaitAccount.ID)
+					}
 					return s.newSelectionResult(ctx, selected.account, true, result.ReleaseFunc, nil)
 				}
 			}
@@ -774,6 +791,28 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			}
 			available = newAvailable
 		}
+	}
+
+	// EffectiveLoadFactor is a soft target. Before queueing, atomically try the
+	// remaining hard capacity of already-filtered accounts. Missing/stale load
+	// snapshots are safe because AcquireAccountSlot enforces Concurrency.
+	if err == nil {
+		remaining := make([]*Account, 0, len(candidates))
+		for _, acc := range candidates {
+			load := loadMap[acc.ID]
+			if load == nil || acc.Concurrency <= 0 || load.CurrentConcurrency < acc.Concurrency {
+				remaining = append(remaining, acc)
+			}
+		}
+		if selection, ok, acquireErr := s.tryAcquireByLegacyOrder(ctx, remaining, groupID, sessionHash, preferOAuth); acquireErr != nil {
+			return nil, acquireErr
+		} else if ok {
+			slog.Info("gateway.hard_capacity_fallback_selected", "group_id", derefGroupID(groupID), "account_id", selection.Account.ID, "platform", platform)
+			return selection, nil
+		}
+	}
+	if stickyWaitPlan != nil {
+		return s.newSelectionResult(ctx, stickyWaitAccount, false, nil, stickyWaitPlan)
 	}
 
 	// ============ Layer 3: 兜底排队 ============
