@@ -354,6 +354,9 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		slog.Info("account_error_code_skipped", "account_id", account.ID, "status_code", statusCode)
 		return false
 	}
+	if s.HandleOpenAIImagePermissionDenied(ctx, account, statusCode, responseBody) {
+		return false
+	}
 
 	if statusCode == 529 {
 		if customErrorCodesEnabled {
@@ -2423,6 +2426,29 @@ func (s *RateLimitService) HandleOpenAICodexSparkRateLimit(ctx context.Context, 
 		slog.Warn("openai_codex_spark_model_rate_limit_set_failed", "account_id", account.ID, "model", modelKey, "error", err)
 	}
 	slog.Info("openai_codex_spark_model_rate_limited", "account_id", account.ID, "model", modelKey, "reset_at", *resetAt)
+	return true
+}
+
+// HandleOpenAIImagePermissionDenied isolates an upstream group capability denial
+// to image requests. It is not evidence of invalid credentials and must never
+// consume the whole-account 403 strike budget.
+func (s *RateLimitService) HandleOpenAIImagePermissionDenied(ctx context.Context, account *Account, statusCode int, responseBody []byte) bool {
+	if s == nil || account == nil || account.Platform != PlatformOpenAI ||
+		statusCode != http.StatusForbidden || !account.ShouldHandleErrorCode(statusCode) ||
+		!gjson.ValidBytes(responseBody) ||
+		!strings.EqualFold(strings.TrimSpace(gjson.GetBytes(responseBody, "error.message").String()), imageGenerationPermissionMessage) {
+		return false
+	}
+	now := time.Now()
+	resetAt := now.Add(openAIImageCapabilityLossCooldown)
+	const reason = "openai_image_permission_denied"
+	setAccountModelRateLimitSnapshot(account, openAIImageGenerationRateLimitKey, resetAt, reason, now)
+	if s.accountRepo != nil {
+		if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, openAIImageGenerationRateLimitKey, resetAt, reason); err != nil {
+			slog.Warn("openai_image_permission_cooldown_failed", "account_id", account.ID, "error", err)
+		}
+	}
+	slog.Info("openai_image_permission_denied", "account_id", account.ID, "scope", openAIImageGenerationRateLimitKey, "reset_at", resetAt)
 	return true
 }
 

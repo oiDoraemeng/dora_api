@@ -342,12 +342,19 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			normalized = litePayload
 		}
 		apiKey := getAPIKeyFromContext(c)
+		var imageToolRemoved bool
+		var imagePrepareErr error
+		normalized, imageToolRemoved, imagePrepareErr = prepareResponsesImageToolForAccount(ctx, apiKeyGroup(apiKey), account, originalModel, normalized)
+		if imagePrepareErr != nil {
+			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid image tool declaration", imagePrepareErr)
+		}
 		imageGenerationAllowed := GroupAllowsImageGeneration(apiKeyGroup(apiKey))
 		codexImageGenerationExplicitToolPolicy := codexImageGenerationExplicitToolPolicyAllow
 		if isCodexCLI {
 			codexImageGenerationExplicitToolPolicy = account.CodexImageGenerationExplicitToolPolicy()
 		}
 		codexBridgeEnabled := isCodexCLI &&
+			!imageToolRemoved &&
 			!isOpenAIResponsesLiteWebSocketPayload(normalized) &&
 			imageGenerationAllowed &&
 			codexImageGenerationExplicitToolPolicy != codexImageGenerationExplicitToolPolicyStrip &&
@@ -415,7 +422,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			logOpenAIWSModeInfo("ingress_ws_codex_spark_image_tool_stripped account_id=%d", account.ID)
 		}
 		imageIntent := IsImageGenerationIntentForPlatform(openAIResponsesEndpoint, originalModel, normalized, account.Platform)
-		if imageIntent && !imageGenerationAllowed {
+		if imageIntent && !imageGenerationAllowed && IsExplicitImageGenerationIntent(openAIResponsesEndpoint, upstreamModel, normalized) {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, ImageGenerationPermissionMessage(), nil)
 		}
 		imageBillingModel := ""

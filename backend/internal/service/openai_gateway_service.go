@@ -627,6 +627,9 @@ func (s *OpenAIGatewayService) isCodexImageGenerationBridgeEnabled(ctx context.C
 	if account == nil || account.Platform != PlatformOpenAI {
 		return false
 	}
+	if account.isRateLimitActiveForKey(openAIImageGenerationRateLimitKey) {
+		return false
+	}
 	if override := account.CodexImageGenerationBridgeOverride(); override != nil {
 		return *override
 	}

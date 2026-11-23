@@ -549,6 +549,15 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
+	if openAICompatibleRequestPlatform(c.Request.Context(), apiKey) == service.PlatformOpenAI {
+		imageCtx, preparedBody, prepareErr := service.PrepareOpenAIResponsesImageToolRequest(c.Request.Context(), apiKey.Group, reqModel, body, nativeV2 || legacyCompact)
+		if prepareErr != nil {
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Invalid image tool declaration")
+			return
+		}
+		body = preparedBody
+		c.Request = c.Request.WithContext(imageCtx)
+	}
 	// 使用 IsExplicitImageGenerationIntent 排除被动 image_gen namespace 声明。
 	// Codex 在所有请求中被动声明 image_gen namespace，宽泛检测会导致禁了生图的
 	// 分组中所有 Codex 请求被 403（#4447），并误占生图并发槽位。
@@ -2584,6 +2593,15 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		return
 	}
 
+	if openAICompatibleRequestPlatform(ctx, apiKey) == service.PlatformOpenAI {
+		imageCtx, preparedMessage, prepareErr := service.PrepareOpenAIResponsesImageToolRequest(ctx, apiKey.Group, reqModel, firstMessage, false)
+		if prepareErr != nil {
+			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "Invalid image tool declaration")
+			return
+		}
+		ctx = imageCtx
+		firstMessage = preparedMessage
+	}
 	imageIntent := service.IsExplicitImageGenerationIntent("/v1/responses", reqModel, firstMessage)
 	if imageIntent && !service.GroupAllowsImageGeneration(apiKey.Group) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, service.ImageGenerationPermissionMessage())

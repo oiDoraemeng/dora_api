@@ -290,7 +290,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		attemptImageIntentInvalidated,
 		IsImageGenerationIntent,
 	)
-	if imageIntent && !GroupAllowsImageGeneration(apiKeyGroup(apiKey)) {
+	if imageIntent && !GroupAllowsImageGeneration(apiKeyGroup(apiKey)) && IsExplicitImageGenerationIntent(openAIResponsesEndpoint, policyModel, body) {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": gin.H{

@@ -1855,6 +1855,9 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if account == nil {
 		return false, "account_nil"
 	}
+	if !responsesImageCatalogAllowsAccount(ctx, account) {
+		return false, "image_model_not_available"
+	}
 	if source, ok := CompositeRouteSourceFromContext(ctx); ok && source == CompositeRouteSourceAccount {
 		if publicModel, modelOK := RequestedPublicModelFromContext(ctx); modelOK && !explicitModelMappingClaims(*account, publicModel) {
 			return false, "account_model_not_owned"
@@ -2254,6 +2257,18 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 	previousResponseCanMove bool,
 	useUpstreamTokenCost bool,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	if policy, enabled := responsesImageToolRoutingFromContext(ctx); enabled && requiredImageCapability == "" && !requireCompact && NormalizeOpenAICompatiblePlatform(platform) == PlatformOpenAI {
+		if _, attempted := ctx.Value(responsesImageCatalogRequiredKey{}).(bool); !attempted {
+			selection, decision, err := s.selectAccountWithScheduler(withResponsesImageCatalogRequirement(ctx, true), groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+			if err == nil || !errors.Is(err, ErrNoAvailableAccounts) {
+				return selection, decision, err
+			}
+			if !policy.requireResponses {
+				requiredCapability = OpenAIEndpointCapabilityChatCompletions
+			}
+			return s.selectAccountWithScheduler(withResponsesImageCatalogRequirement(ctx, false), groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+		}
+	}
 	selection, decision, err := s.selectAccountWithSchedulerOnce(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
 	if err == nil || openAIProxyStreamQuarantineBypassed(ctx) {
 		return selection, decision, err

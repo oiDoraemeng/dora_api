@@ -709,6 +709,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		firstClientMessage = next
 	}
 	requestModel := strings.TrimSpace(gjson.GetBytes(firstClientMessage, "model").String())
+	var imagePrepareErr error
+	firstClientMessage, _, imagePrepareErr = prepareResponsesImageToolForAccount(ctx, apiKeyGroup(getAPIKeyFromContext(c)), account, requestModel, firstClientMessage)
+	if imagePrepareErr != nil {
+		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid image tool declaration", imagePrepareErr)
+	}
 	requestPreviousResponseID := strings.TrimSpace(gjson.GetBytes(firstClientMessage, "previous_response_id").String())
 	promptCacheKey := strings.TrimSpace(gjson.GetBytes(firstClientMessage, "prompt_cache_key").String())
 	logOpenAIWSV2Passthrough(
@@ -1007,6 +1012,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 			responsesLite := isResponseCreate && isOpenAIResponsesLiteWebSocketPayload(payload)
 			if isResponseCreate {
+				var imagePrepareErr error
+				payload, _, imagePrepareErr = prepareResponsesImageToolForAccount(ctx, apiKeyGroup(getAPIKeyFromContext(c)), account, capturedSessionModel, payload)
+				if imagePrepareErr != nil {
+					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid image tool declaration", imagePrepareErr)
+				}
 				if normalized, compatibilityChanged, normalizeErr := normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfig(s.cfg, payload, account, responsesLite); normalizeErr != nil {
 					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", normalizeErr)
 				} else if compatibilityChanged {

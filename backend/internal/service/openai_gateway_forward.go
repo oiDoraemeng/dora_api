@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -19,6 +20,16 @@ import (
 
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	var imageToolRemoved bool
+	var imageToolErr error
+	body, imageToolRemoved, imageToolErr = applyResponsesImageToolAccountFallback(ctx, account, body)
+	if imageToolErr != nil {
+		return nil, imageToolErr
+	}
+	if imageToolRemoved {
+		ctx = withResponsesImageCatalogRequirement(ctx, false)
+		slog.Info("openai_responses_image_tool_stripped", "account_id", account.ID)
+	}
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
@@ -255,7 +266,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, errors.New("openai ws v1 is temporarily unsupported; use ws v2")
 	}
 	if passthroughEnabled {
-		attemptImageIntentInvalidated := false
+		attemptImageIntentInvalidated := imageToolRemoved
 		if isCodexCLI && codexImageGenerationExplicitToolPolicy == codexImageGenerationExplicitToolPolicyStrip {
 			strippedBody, changed, stripErr := stripOpenAIImageGenerationToolsFromRawPayload(body)
 			if stripErr != nil {
@@ -345,12 +356,16 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		imageGenerationAllowed = GroupAllowsImageGeneration(apiKey.Group)
 	}
 	codexImageGenerationBridgeEnabled := isCodexCLI &&
+		!imageToolRemoved &&
 		!isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) &&
 		imageGenerationAllowed &&
 		codexImageGenerationExplicitToolPolicy != codexImageGenerationExplicitToolPolicyStrip &&
 		s.isCodexImageGenerationBridgeEnabled(ctx, account, apiKey)
 	var imageIntent bool
 	canonicalImageIntent := resolveOpenAIImageIntentHint(c, reqModel, canonicalImageIntentBody, IsImageGenerationIntent)
+	if imageToolRemoved {
+		canonicalImageIntent = IsImageGenerationIntent(openAIResponsesEndpoint, reqModel, body)
+	}
 	if isCodexCLI && codexImageGenerationExplicitToolPolicy == codexImageGenerationExplicitToolPolicyStrip {
 		decoded, decodeErr := ensureReqBody()
 		if decodeErr != nil {
@@ -364,7 +379,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	} else {
 		imageIntent = canonicalImageIntent
 	}
-	if imageIntent && !imageGenerationAllowed {
+	if imageIntent && !imageGenerationAllowed && IsExplicitImageGenerationIntent(openAIResponsesEndpoint, reqModel, body) {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
 		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{"type": "permission_error", "message": ImageGenerationPermissionMessage()}})
 		return nil, errors.New("image generation disabled for group")
@@ -414,7 +429,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 
 	imageIntent = imageIntent || IsImageGenerationIntent(openAIResponsesEndpoint, reqModel, nil) || isOpenAIImageGenerationModel(upstreamModel)
-	if imageIntent && !imageGenerationAllowed {
+	if imageIntent && !imageGenerationAllowed && (IsExplicitImageGenerationIntent(openAIResponsesEndpoint, reqModel, body) || isOpenAIImageGenerationModel(upstreamModel)) {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
 		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{"type": "permission_error", "message": ImageGenerationPermissionMessage()}})
 		return nil, errors.New("image generation disabled for group")
