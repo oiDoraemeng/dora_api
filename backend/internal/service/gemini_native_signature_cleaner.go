@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
@@ -22,10 +23,15 @@ func CleanGeminiNativeThoughtSignatures(body []byte) []byte {
 	if len(body) == 0 {
 		return body
 	}
+	if !json.Valid(body) {
+		return body
+	}
 
 	// 解析 JSON
 	var data any
-	if err := json.Unmarshal(body, &data); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&data); err != nil {
 		// 如果解析失败，返回原始 body（可能不是 JSON 或格式不正确）
 		return body
 	}

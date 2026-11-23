@@ -738,6 +738,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		}
 		requestIDHeader = idHeader
 
+		setGeminiAttemptRequest(c, geminiReq, mappedModel)
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {
 			return nil, s.handleUpstreamTransportError(ctx, c, account, err)
@@ -1121,6 +1122,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 	// Some Gemini upstreams validate tool call parts strictly; ensure any `functionCall` part includes a
 	// `thoughtSignature` to avoid frequent INVALID_ARGUMENT 400s.
+	body = normalizeGeminiToolPayloads(body)
 	body = ensureGeminiFunctionCallThoughtSignatures(body)
 
 	mappedModel := originalModel
@@ -1291,6 +1293,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		}
 		requestIDHeader = idHeader
 
+		setGeminiAttemptRequest(c, body, mappedModel)
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {
 			transportErr := s.handleUpstreamTransportError(ctx, c, account, err)
@@ -3349,8 +3352,8 @@ func ensureGeminiFunctionCallThoughtSignatures(body []byte) []byte {
 		return body
 	}
 
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
+	payload, err := decodeGeminiRequestObject(body)
+	if err != nil {
 		return body
 	}
 
@@ -3457,8 +3460,8 @@ func mapGeminiFinishReasonToClaudeStopReason(finishReason string) string {
 }
 
 func convertClaudeMessagesToGeminiGenerateContent(body []byte) ([]byte, error) {
-	var req map[string]any
-	if err := json.Unmarshal(body, &req); err != nil {
+	req, err := decodeGeminiRequestObject(body)
+	if err != nil {
 		return nil, err
 	}
 
@@ -3488,7 +3491,11 @@ func convertClaudeMessagesToGeminiGenerateContent(body []byte) ([]byte, error) {
 	}
 
 	stripGeminiFunctionIDs(out)
-	return json.Marshal(out)
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeGeminiToolPayloads(encoded), nil
 }
 
 func stripGeminiFunctionIDs(req map[string]any) {
@@ -3808,8 +3815,8 @@ func convertClaudeToolsToGeminiTools(tools any) []any {
 }
 
 func normalizeGeminiRequestForAIStudio(body []byte) []byte {
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
+	payload, err := decodeGeminiRequestObject(body)
+	if err != nil {
 		return body
 	}
 
@@ -4070,11 +4077,11 @@ func convertClaudeGenerationConfig(req map[string]any) map[string]any {
 	if mt, ok := asInt(req["max_tokens"]); ok && mt > 0 {
 		out["maxOutputTokens"] = mt
 	}
-	if temp, ok := req["temperature"].(float64); ok {
-		out["temperature"] = temp
-	}
-	if topP, ok := req["top_p"].(float64); ok {
-		out["topP"] = topP
+	for input, output := range map[string]string{"temperature": "temperature", "top_p": "topP"} {
+		switch value := req[input].(type) {
+		case float64, json.Number:
+			out[output] = value
+		}
 	}
 	if stopSeq, ok := req["stop_sequences"].([]any); ok && len(stopSeq) > 0 {
 		out["stopSequences"] = stopSeq

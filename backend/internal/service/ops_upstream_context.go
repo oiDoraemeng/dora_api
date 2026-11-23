@@ -499,8 +499,9 @@ type OpsUpstreamErrorEvent struct {
 	Scope  string `json:"scope,omitempty"`
 	Reason string `json:"reason,omitempty"`
 
-	Message string `json:"message,omitempty"`
-	Detail  string `json:"detail,omitempty"`
+	Message      string              `json:"message,omitempty"`
+	Detail       string              `json:"detail,omitempty"`
+	RequestShape *GeminiRequestShape `json:"request_shape,omitempty"`
 
 	// SkipMonitoring is request-local rule state. It is intentionally excluded
 	// from persisted attempt JSON. The logger consults it only when this event is
@@ -535,6 +536,9 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	ev.UpstreamURL = strings.TrimSpace(ev.UpstreamURL)
 	ev.Message = strings.TrimSpace(ev.Message)
 	ev.Detail = strings.TrimSpace(ev.Detail)
+	if ev.Platform == PlatformGemini && (ev.UpstreamStatusCode == 400 || ev.UpstreamStatusCode == 422) {
+		ev.RequestShape = geminiRequestShapeFromContext(c)
+	}
 	if ev.Message != "" {
 		ev.Message = sanitizeUpstreamErrorMessage(ev.Message)
 	}
