@@ -349,7 +349,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					"in_account_map", func() bool { _, ok := accountByID[stickyAccountID]; return ok }(),
 					"session", shortSessionHash(sessionHash),
 				)
-				if containsInt64(routingAccountIDs, stickyAccountID) && !isExcluded(stickyAccountID) {
+				if containsInt64(routingAccountIDs, stickyAccountID) && !isExcluded(stickyAccountID) && !s.gatewayStickyDegraded(accountByID[stickyAccountID], requestedModel) {
 					// 粘性账号在路由列表中，优先使用
 					if stickyAccount, ok := accountByID[stickyAccountID]; ok {
 						var stickyCacheMissReason string
@@ -456,11 +456,26 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			}
 
 			if len(routingAvailable) > 0 {
+				qualityNow := time.Now()
+				qualityScores := make(map[int64]float64)
+				for _, item := range routingAvailable {
+					if item.account.Platform == PlatformAnthropic && item.account.Type == AccountTypeAPIKey {
+						qualityScores[item.account.ID] = s.gatewayQualityScore(item, requestedModel, qualityNow)
+					}
+				}
+				if len(qualityScores) != len(routingAvailable) {
+					clear(qualityScores) // Mixed-platform/OAuth ordering remains unchanged.
+				}
 				// 排序：优先级 > 负载率 > 最后使用时间
 				sort.SliceStable(routingAvailable, func(i, j int) bool {
 					a, b := routingAvailable[i], routingAvailable[j]
 					if a.account.Priority != b.account.Priority {
 						return a.account.Priority < b.account.Priority
+					}
+					if as, ok := qualityScores[a.account.ID]; ok {
+						if bs, ok := qualityScores[b.account.ID]; ok && as != bs {
+							return as > bs
+						}
 					}
 					if a.loadInfo.LoadRate != b.loadInfo.LoadRate {
 						return a.loadInfo.LoadRate < b.loadInfo.LoadRate
@@ -476,7 +491,9 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 						return a.account.LastUsedAt.Before(*b.account.LastUsedAt)
 					}
 				})
-				shuffleWithinSortGroups(routingAvailable)
+				if len(qualityScores) == 0 {
+					shuffleWithinSortGroups(routingAvailable)
+				}
 
 				// 4. 尝试获取槽位
 				for _, item := range routingAvailable {
@@ -527,7 +544,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	var stickyWaitAccount *Account
 	var stickyWaitPlan *AccountWaitPlan
 	// ============ Layer 1.5: 粘性会话（仅在无模型路由配置时生效） ============
-	if len(routingAccountIDs) == 0 && sessionHash != "" && stickyAccountID > 0 && !isExcluded(stickyAccountID) {
+	if len(routingAccountIDs) == 0 && sessionHash != "" && stickyAccountID > 0 && !isExcluded(stickyAccountID) && !s.gatewayStickyDegraded(accountByID[stickyAccountID], requestedModel) {
 		accountID := stickyAccountID
 		if accountID > 0 && !isExcluded(accountID) {
 			account, ok := accountByID[accountID]
@@ -757,10 +774,10 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			if cfg.PreferSoonestReset {
 				candidates = filterBySoonestReset(candidates)
 			}
-			// 3. 取负载率最低的集合
-			candidates = filterByMinLoadRate(candidates)
-			// 4. LRU 选择最久未用的账号
-			selected := selectByLRU(candidates, preferOAuth)
+			// Anthropic API keys combine success, first-token latency and load.
+			// Priority and reset preference remain strict; other platforms keep
+			// their existing minimum-load/LRU policy.
+			selected := s.selectByGatewayQuality(candidates, requestedModel, preferOAuth)
 			if selected == nil {
 				break
 			}
