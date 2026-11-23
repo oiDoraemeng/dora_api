@@ -2,10 +2,12 @@ package service
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -244,6 +246,12 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		}
 	}
 
+	normalizedToolBody, _, normalizeErr := normalizeOpenAIResponsesToolHistoryWithRepair(responsesBody, !isResponsesShape)
+	if normalizeErr != nil {
+		return nil, normalizeErr
+	}
+	responsesBody = normalizedToolBody
+
 	logFields := []zap.Field{
 		zap.Int64("account_id", account.ID),
 		zap.String("original_model", originalModel),
@@ -366,6 +374,37 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
+	var respBody []byte
+	var upstreamMsg string
+	var completeErrorBody bool
+	if resp.StatusCode >= 400 {
+		respBody, upstreamMsg, completeErrorBody = s.readOpenAIUpstreamErrorWithCompleteness(resp)
+		if completeErrorBody {
+			retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, responsesBody, respBody)
+			if retryErr != nil {
+				_ = resp.Body.Close()
+				return nil, retryErr
+			}
+			if changed && openAIResponsesRejectedFieldRetryStateForRequest(c, responsesBody).Allow(retryBody) {
+				_ = resp.Body.Close()
+				upstreamReq = upstreamReq.Clone(upstreamReq.Context())
+				upstreamReq.Body = io.NopCloser(bytes.NewReader(retryBody))
+				upstreamReq.ContentLength = int64(len(retryBody))
+				upstreamReq.GetBody = func() (io.ReadCloser, error) {
+					return io.NopCloser(bytes.NewReader(retryBody)), nil
+				}
+				logger.L().Info("openai chat_completions: retrying corrected Responses body",
+					zap.Int64("account_id", account.ID), zap.String("reason", reason))
+				resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+				if err != nil {
+					return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+				}
+				if resp.StatusCode >= 400 {
+					respBody, upstreamMsg, completeErrorBody = s.readOpenAIUpstreamErrorWithCompleteness(resp)
+				}
+			}
+		}
+	}
 	defer func() {
 		cancelUpstream()
 		_ = resp.Body.Close()
@@ -373,7 +412,6 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
-		respBody, upstreamMsg, completeErrorBody := s.readOpenAIUpstreamErrorWithCompleteness(resp)
 		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 			expectedTaskID := account.GetCredential("task_id")
 			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {

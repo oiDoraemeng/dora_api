@@ -8,6 +8,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // normalizeOpenAIResponsesLegacyIngress accepts the Chat Completions-shaped
@@ -34,7 +35,7 @@ func normalizeOpenAIResponsesLegacyIngressWithConfig(cfg *config.Config, body []
 			return !hasLegacyField
 		})
 		if !hasLegacyField {
-			return body, false, nil
+			return normalizeOpenAIResponsesToolHistory(body)
 		}
 	}
 
@@ -44,6 +45,7 @@ func normalizeOpenAIResponsesLegacyIngressWithConfig(cfg *config.Config, body []
 	}
 
 	changed := false
+	repairIncompleteHistory := false
 	messagesValue, hasMessages := request["messages"]
 	if hasMessages {
 		messages, messagesAreArray := messagesValue.([]any)
@@ -57,6 +59,7 @@ func normalizeOpenAIResponsesLegacyIngressWithConfig(cfg *config.Config, body []
 			hasNativeInput := hasInput && input != nil
 			if !hasNativeInput {
 				request["input"] = legacy.input
+				repairIncompleteHistory = true
 				applyLegacyResponsesTopLevelFields(request, legacy)
 				delete(request, "previous_response_id")
 			}
@@ -86,13 +89,40 @@ func normalizeOpenAIResponsesLegacyIngressWithConfig(cfg *config.Config, body []
 	}
 
 	if !changed {
-		return body, false, nil
+		return normalizeOpenAIResponsesToolHistory(body)
 	}
 	normalized, err := marshalOpenAIUpstreamJSON(request)
 	if err != nil {
 		return body, false, fmt.Errorf("serialize legacy Responses ingress: %w", err)
 	}
-	return normalized, true, nil
+	repaired, _, err := normalizeOpenAIResponsesToolHistoryWithRepair(normalized, repairIncompleteHistory)
+	return repaired, true, err
+}
+
+func normalizeOpenAIResponsesToolHistory(body []byte) ([]byte, bool, error) {
+	return normalizeOpenAIResponsesToolHistoryWithRepair(body, false)
+}
+
+func normalizeOpenAIResponsesToolHistoryWithRepair(body []byte, repairIncomplete bool) ([]byte, bool, error) {
+	input := gjson.GetBytes(body, "input")
+	if !input.IsArray() {
+		return body, false, nil
+	}
+	normalize := apicompat.NormalizeResponsesToolHistory
+	if repairIncomplete {
+		normalize = apicompat.RepairResponsesToolHistory
+	}
+	repaired, changed, err := normalize(
+		json.RawMessage(input.Raw), strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String()) != "",
+	)
+	if err != nil {
+		return body, false, fmt.Errorf("normalize Responses tool history: %w", err)
+	}
+	if !changed {
+		return body, false, nil
+	}
+	normalized, err := sjson.SetRawBytes(body, "input", repaired)
+	return normalized, true, err
 }
 
 type convertedLegacyResponsesMessages struct {

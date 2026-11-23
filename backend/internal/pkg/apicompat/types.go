@@ -291,13 +291,25 @@ func (i *ResponsesInputItem) UnmarshalJSON(data []byte) error {
 	type alias ResponsesInputItem
 	var wire struct {
 		*alias
-		Output json.RawMessage `json:"output"`
+		Arguments json.RawMessage `json:"arguments"`
+		Output    json.RawMessage `json:"output"`
 	}
 
 	*i = ResponsesInputItem{}
 	wire.alias = (*alias)(i)
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
+	}
+	arguments := bytes.TrimSpace(wire.Arguments)
+	if len(arguments) > 0 && !bytes.Equal(arguments, []byte("null")) {
+		if err := json.Unmarshal(arguments, &i.Arguments); err != nil {
+			// Some clients replay tool arguments as an object. Keep its JSON
+			// representation without decoding numbers through float64.
+			if arguments[0] != '{' {
+				return err
+			}
+			i.Arguments = string(arguments)
+		}
 	}
 
 	output := bytes.TrimSpace(wire.Output)

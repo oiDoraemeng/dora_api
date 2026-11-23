@@ -112,13 +112,24 @@ func (s *openAIResponsesRejectedFieldRetryState) rememberLocked(body []byte) {
 }
 
 func normalizeOpenAIResponsesRejectedFieldRetryBody(statusCode int, body, responseBody []byte) ([]byte, string, bool, error) {
-	if statusCode != http.StatusBadRequest || len(body) == 0 || len(responseBody) == 0 {
+	if len(body) == 0 || len(responseBody) == 0 {
 		return nil, "", false, nil
 	}
-
 	code := strings.ToLower(strings.TrimSpace(extractUpstreamErrorCode(responseBody)))
 	message := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(responseBody)))
 	param := strings.ToLower(strings.TrimSpace(gjson.GetBytes(responseBody, "error.param").String()))
+	if (statusCode == http.StatusBadRequest || statusCode == http.StatusUnprocessableEntity || statusCode == http.StatusBadGateway) &&
+		(strings.Contains(message, "no tool output found") ||
+			strings.Contains(message, "tool call is missing its matching output") ||
+			strings.Contains(message, "tool history is missing a required tool result") ||
+			(strings.Contains(message, "missing required parameter") &&
+				(strings.Contains(message, "].name") || strings.HasSuffix(param, "].name")))) {
+		retryBody, changed, err := normalizeOpenAIResponsesToolHistoryWithRepair(body, true)
+		return retryBody, "incomplete tool history rejection", changed, err
+	}
+	if statusCode != http.StatusBadRequest {
+		return nil, "", false, nil
+	}
 	if code == "invalid_function_parameters" &&
 		openAIResponsesToolParametersParamPattern.MatchString(param) &&
 		openAIResponsesMissingSchemaTypePattern.MatchString(message) {

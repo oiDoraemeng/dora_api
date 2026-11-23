@@ -83,5 +83,6 @@ func TestChatCompletionsToResponses_LegacyFunctionResultWithoutCallKeepsName(t *
 	})
 	require.Len(t, items, 2)
 	require.Equal(t, "function_call_output", items[1].Type)
-	require.Equal(t, "lookup", items[1].CallID)
+	require.Empty(t, items[1].CallID)
+	require.Equal(t, "lookup", items[1].Name)
 }

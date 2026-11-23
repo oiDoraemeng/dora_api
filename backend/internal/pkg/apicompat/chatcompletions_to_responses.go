@@ -370,6 +370,7 @@ func chatToolToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 	return []ResponsesInputItem{{
 		Type:   "function_call_output",
 		CallID: m.ToolCallID,
+		Name:   m.Name,
 		Output: output,
 	}}, nil
 }
@@ -377,7 +378,7 @@ func chatToolToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 // chatFunctionToResponses converts a legacy function result message
 // (role=function) into a function_call_output item. ToolCallID holds the ID
 // assigned to the matching legacy call (see legacyFunctionCallIDs); without a
-// matching call the Name field is used as call_id.
+// matching call preserve the named standalone output without inventing an ID.
 func chatFunctionToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 	output, err := parseChatContent(m.Content)
 	if err != nil {
@@ -386,13 +387,10 @@ func chatFunctionToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 	if output == "" {
 		output = "(empty)"
 	}
-	callID := m.ToolCallID
-	if callID == "" {
-		callID = m.Name
-	}
 	return []ResponsesInputItem{{
 		Type:   "function_call_output",
-		CallID: callID,
+		CallID: m.ToolCallID,
+		Name:   m.Name,
 		Output: output,
 	}}, nil
 }

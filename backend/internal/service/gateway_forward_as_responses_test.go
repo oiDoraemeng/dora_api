@@ -46,6 +46,31 @@ func TestAdaptResponsesClientToolsForAnthropic_FlattensNamespace(t *testing.T) {
 	require.NotContains(t, call, "namespace")
 }
 
+func TestForwardAsResponsesAcceptsObjectToolArguments(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-5-5","stream":false,"input":[
+	 {"role":"user","content":"lookup"},
+	 {"type":"function_call","call_id":"call_1","name":"lookup","arguments":{"n":9007199254740993}},
+	 {"type":"function_call_output","call_id":"call_1","output":"actual result"},
+	 {"role":"user","content":"continue"}
+	]}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(namespaceToolAnthropicStream())),
+	}}
+	svc := &GatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{ID: 1, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "fixture-key"}}
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "/v1/messages", upstream.lastReq.URL.Path)
+	require.Equal(t, "9007199254740993", gjson.GetBytes(upstream.lastBody, "messages.1.content.0.input.n").Raw)
+	require.Equal(t, "lookup", gjson.GetBytes(upstream.lastBody, "messages.1.content.0.name").String())
+	require.Equal(t, "actual result", gjson.GetBytes(upstream.lastBody, "messages.2.content.0.content").String())
+}
+
 func TestAdaptResponsesClientToolsForAnthropic_LiftsAdditionalTools(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-fable-5",
