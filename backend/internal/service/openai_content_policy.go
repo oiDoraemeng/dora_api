@@ -43,6 +43,8 @@ func isOpenAIContentPolicyRejection(statusCode int, body []byte) bool {
 		"account suspended", "account has been suspended", "account disabled", "account has been disabled",
 		"workspace suspended", "workspace has been suspended", "workspace disabled", "workspace has been disabled",
 		"subscription required", "entitlement required", "not entitled", "invalid api key",
+		"insufficient balance", "insufficient account balance", "insufficient user quota",
+		"余额不足", "额度不足", "账户已封禁", "账号已封禁", "密钥无效",
 	} {
 		if strings.Contains(lower, phrase) {
 			return false
@@ -55,12 +57,20 @@ func isOpenAIContentPolicyRejection(statusCode int, body []byte) bool {
 		"request rejected by the content moderation policy", "request rejected by content moderation",
 		"request blocked by content moderation", "content policy violation", "content policy rejection",
 		"prompt violates content policy", "input violates content policy",
+		"内容审计命中风险规则，请调整输入后重试",
 	} {
 		if strings.Contains(lower, phrase) {
 			return true
 		}
 	}
 	return false
+}
+
+// Claude-compatible relays also report request moderation as HTTP 403. These
+// refusals must bypass account state changes and cross-account replay.
+func isAccountContentPolicyRejection(account *Account, statusCode int, body []byte) bool {
+	return account != nil && (account.Platform == PlatformAnthropic || account.Platform == PlatformOpenAI || account.IsMultiProtocolAPIKey()) &&
+		isOpenAIContentPolicyRejection(statusCode, body)
 }
 
 func isOpenAIAccountContentPolicyRejection(account *Account, statusCode int, body []byte) bool {

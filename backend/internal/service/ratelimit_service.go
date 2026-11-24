@@ -300,7 +300,7 @@ const (
 // CheckErrorPolicy 检查自定义错误码和临时不可调度规则。
 // 请求级内容审核拒绝不处罚账号；其他错误由自定义错误码覆盖后续逻辑（包括临时不可调度）。
 func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Account, statusCode int, responseBody []byte, requestedModel ...string) ErrorPolicyResult {
-	if isOpenAIAccountContentPolicyRejection(account, statusCode, responseBody) {
+	if isAccountContentPolicyRejection(account, statusCode, responseBody) {
 		return ErrorPolicySkipped
 	}
 	ctx = withTempUnschedulableModel(ctx, requestedModel)
@@ -334,7 +334,7 @@ func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Accoun
 // HandleUpstreamError 处理上游错误响应，标记账号状态
 // 返回是否应该停止该账号的调度
 func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) (shouldDisable bool) {
-	if isOpenAIAccountContentPolicyRejection(account, statusCode, responseBody) {
+	if isAccountContentPolicyRejection(account, statusCode, responseBody) {
 		return false
 	}
 	ctx = withTempUnschedulableModel(ctx, requestedModel)
@@ -1015,6 +1015,9 @@ func buildForbiddenErrorMessage(prefix string, upstreamMsg string, responseBody 
 // handle403 处理 403 Forbidden 错误。Cloudflare 1010 是请求/边缘级拦截，
 // 不应将其视为账号级故障；其他真实 403 继续按平台策略处理。
 func (s *RateLimitService) handle403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
+	if isAccountContentPolicyRejection(account, http.StatusForbidden, responseBody) {
+		return false
+	}
 	if isCloudflareBotBlockResponse(responseBody) {
 		slog.Warn(
 			"403_cloudflare_bot_block_skips_account_penalty",
@@ -2790,7 +2793,7 @@ func (s *RateLimitService) tryTempUnschedulable(ctx context.Context, account *Ac
 	if account == nil {
 		return false
 	}
-	if isOpenAIAccountContentPolicyRejection(account, statusCode, responseBody) {
+	if isAccountContentPolicyRejection(account, statusCode, responseBody) {
 		return false
 	}
 	if !account.IsTempUnschedulableEnabled() {

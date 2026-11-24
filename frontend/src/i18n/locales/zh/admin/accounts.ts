@@ -989,6 +989,10 @@ export default {
       errorCodeExists: '该错误码已被选中',
       interceptWarmupRequests: '拦截预热请求',
       interceptWarmupRequestsDesc: '启用后，标题生成等预热请求将返回 mock 响应，不消耗上游 token',
+      claudeCodeCompatibility: {
+        title: 'Claude Code 兼容',
+        hint: '为此账号补齐 Claude Code 请求格式，允许其他客户端通过网关调用。保留原有系统指令和工具。'
+      },
       headerOverride: {
         title: '请求头覆写',
         hint: '转发时用配置值覆盖同名请求头（不区分大小写）',

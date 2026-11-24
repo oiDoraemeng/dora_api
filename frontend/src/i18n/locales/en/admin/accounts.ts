@@ -887,6 +887,10 @@ export default {
       interceptWarmupRequests: 'Intercept Warmup Requests',
       interceptWarmupRequestsDesc:
         'When enabled, warmup requests like title generation will return mock responses without consuming upstream tokens',
+      claudeCodeCompatibility: {
+        title: 'Claude Code Compatibility',
+        hint: 'Add the Claude Code request format for this account so other clients can use it through the gateway. Preserve existing instructions and tools.'
+      },
       headerOverride: {
         title: 'Header Override',
         hint: 'Override same-named request headers on forwarding (case-insensitive)',

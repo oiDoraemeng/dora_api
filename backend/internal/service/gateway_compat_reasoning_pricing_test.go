@@ -43,6 +43,11 @@ func TestGatewayAnthropicCompatReasoningPricingUsesForwardedEffort(t *testing.T)
 			}{
 				{"xhigh_converts_to_max", "claude-fable-5-1", "xhigh", "", "max", 3},
 				{"native_max", "claude-fable-5-1", "max", "", "max", 3},
+				{"opus_min", "claude-opus-5-5", "min", "", "low", 1},
+				{"opus_minimal", "claude-opus-5-5", "minimal", "", "low", 1},
+				{"sonnet_min", "claude-sonnet-5-5", "min", "", "low", 1},
+				{"haiku_minimal", "claude-haiku-5-5", "minimal", "", "low", 1},
+				{"older_claude_min", "claude-opus-5", "min", "", "low", 1},
 				{"missing_effort", "kimi-k3", "", "", "", 1},
 				{"disabled_thinking", "kimi-k3", "", "disabled", "", 1},
 				{"unforwarded_thinking", "kimi-k3", "", "enabled", "", 1},

@@ -833,6 +833,19 @@
         </div>
       </div>
 
+      <div
+        v-if="account?.platform === 'anthropic' && account?.type === 'apikey'"
+        class="flex items-center justify-between border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div>
+          <label class="input-label mb-0">{{ t('admin.accounts.claudeCodeCompatibility.title') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.claudeCodeCompatibility.hint') }}
+          </p>
+        </div>
+        <Toggle v-model="claudeCodeCompatibilityEnabled" />
+      </div>
+
       <!-- Header Override Section (eligible API-key platforms + grok OAuth) -->
       <div v-if="headerOverrideCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -3872,6 +3885,7 @@ const customErrorCodesEnabled = ref(false)
 const selectedErrorCodes = ref<number[]>([])
 const customErrorCodeInput = ref<number | null>(null)
 const headerOverrideEnabled = ref(false)
+const claudeCodeCompatibilityEnabled = ref(false)
 const headerOverrideRows = ref<HeaderOverrideRow[]>([])
 
 const headerOverrideCapable = computed(
@@ -4808,6 +4822,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   loadAccountSchedulingThresholdOverride(newAccount.platform, credentials)
 
   // Load header override state for eligible account platforms/types
+  claudeCodeCompatibilityEnabled.value =
+    newAccount.platform === 'anthropic' && newAccount.type === 'apikey' &&
+    newAccount.credentials?.claude_code_compatibility === true
   headerOverrideEnabled.value = false
   headerOverrideRows.value = []
   if (newAccount.credentials && isHeaderOverrideCapable(newAccount.platform, newAccount.type)) {
@@ -5772,6 +5789,14 @@ const handleSubmit = async () => {
       } else {
         delete newCredentials.custom_error_codes_enabled
         delete newCredentials.custom_error_codes
+      }
+
+      if (props.account.platform === 'anthropic') {
+        if (claudeCodeCompatibilityEnabled.value) {
+          newCredentials.claude_code_compatibility = true
+        } else {
+          delete newCredentials.claude_code_compatibility
+        }
       }
 
       // Add header override if enabled for this API-key platform

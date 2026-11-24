@@ -121,6 +121,15 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		}
 
 		// 透传分支禁止 400 请求体降级重试（该重试会改写请求体）
+		if resp.StatusCode == http.StatusForbidden {
+			respBody, _ := s.readUpstreamErrorBody(resp)
+			_ = resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			if isAccountContentPolicyRejection(account, resp.StatusCode, respBody) {
+				defer func() { _ = resp.Body.Close() }()
+				return s.handleContentPolicyRejection(c, account, resp, respBody)
+			}
+		}
 		if resp.StatusCode >= 400 && resp.StatusCode != 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
 			if attempt < maxRetryAttempts {
 				elapsed := time.Since(retryStart)
@@ -300,6 +309,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	token string,
 ) (*http.Request, []byte, error) {
 	body = stripDeferredToolCacheControl(body)
+	body = prepareClaudeCodeAPIKeyCompatibilityBody(c, account, body)
 	targetURL := claudeAPIURL
 	baseURL := getAnthropicGatewayBaseURL(account)
 	if baseURL != "" {
@@ -321,6 +331,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	if beta, ok := account.HeaderOverrideValue("anthropic-beta"); ok {
 		clientBeta = beta
 	}
+	clientBeta = claudeCodeAPIKeyCompatibilityBeta(account, clientBeta)
 	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, clientBeta); changed {
 		body = sanitized
 	}
@@ -365,6 +376,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 
 	// 账号级请求头覆写（最终生效，覆盖上面所有来源的同名头）
 	account.ApplyHeaderOverrides(req.Header)
+	applyClaudeCodeAPIKeyCompatibilityHeaders(req, account, body)
 	filterSonnet55ToolsetBetaHeader(req.Header, body, gjson.GetBytes(body, "model").String())
 
 	return req, body, nil

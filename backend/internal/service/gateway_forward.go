@@ -624,6 +624,18 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			}
 		}
 
+		// Moderation describes this request, including on accounts with custom
+		// retry policies. Return it once without replaying it on other credentials.
+		if resp.StatusCode == http.StatusForbidden {
+			respBody, _ := s.readUpstreamErrorBody(resp)
+			_ = resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			if isAccountContentPolicyRejection(account, resp.StatusCode, respBody) {
+				defer func() { _ = resp.Body.Close() }()
+				return s.handleContentPolicyRejection(c, account, resp, respBody)
+			}
+		}
+
 		// 检查是否需要通用重试（排除400，因为400已经在上面特殊处理过了）
 		if resp.StatusCode >= 400 && resp.StatusCode != 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
 			if attempt < maxRetryAttempts {

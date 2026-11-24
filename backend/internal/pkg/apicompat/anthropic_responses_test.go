@@ -1909,7 +1909,7 @@ func TestSonnet55ResponsesThinkingAndSampling(t *testing.T) {
 	topP := 0.5
 	_, err = ResponsesToAnthropicRequest(&ResponsesRequest{Model: "claude-sonnet-5-5", Input: json.RawMessage(`"hello"`), TopP: &topP})
 	require.ErrorContains(t, err, "top_p")
-	_, err = ResponsesToAnthropicRequest(&ResponsesRequest{Model: "claude-sonnet-5-5", Input: json.RawMessage(`"hello"`), Reasoning: &ResponsesReasoning{Effort: "minimal"}})
+	_, err = ResponsesToAnthropicRequest(&ResponsesRequest{Model: "claude-sonnet-5-5", Input: json.RawMessage(`"hello"`), Reasoning: &ResponsesReasoning{Effort: "invalid"}})
 	require.ErrorContains(t, err, "reasoning effort")
 
 	temperature, topP = 1, 0.99
@@ -1970,7 +1970,7 @@ func TestHaiku55ResponsesThinkingAndSampling(t *testing.T) {
 		_, err = ResponsesToAnthropicRequest(&ResponsesRequest{Model: "claude-haiku-5-5", Input: json.RawMessage(`"hello"`), TopP: &topP})
 		require.ErrorContains(t, err, "top_p", "top_p=%v", topP)
 	}
-	_, err = ResponsesToAnthropicRequest(&ResponsesRequest{Model: "claude-haiku-5-5", Input: json.RawMessage(`"hello"`), Reasoning: &ResponsesReasoning{Effort: "minimal"}})
+	_, err = ResponsesToAnthropicRequest(&ResponsesRequest{Model: "claude-haiku-5-5", Input: json.RawMessage(`"hello"`), Reasoning: &ResponsesReasoning{Effort: "invalid"}})
 	require.ErrorContains(t, err, "reasoning effort")
 
 	temperature = 1

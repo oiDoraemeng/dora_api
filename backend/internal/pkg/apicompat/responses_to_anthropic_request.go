@@ -99,6 +99,11 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, erro
 		if req.Reasoning != nil && req.Reasoning.Effort != "" {
 			effort = req.Reasoning.Effort
 		}
+		// OpenAI-compatible clients use min/minimal for their lowest effort.
+		// Claude has no separate minimal tier; low is the closest supported value.
+		if effort == "min" || effort == "minimal" {
+			effort = "low"
+		}
 		if isSonnet55 && effort == "none" {
 			// OpenAI's no-reasoning request maps to Sonnet 5.5's lowest
 			// thinking mode. between_tools still preserves signed progress
@@ -165,12 +170,16 @@ func defaultThinkingBudget(effort string) int {
 // mapResponsesEffortToAnthropic converts OpenAI Responses reasoning effort to
 // Anthropic effort levels. Reverse of mapAnthropicEffortToResponses.
 //
-//	low    → low
-//	medium → medium
-//	high   → high
-//	xhigh  → max
+//	min/minimal → low
+//	low         → low
+//	medium      → medium
+//	high        → high
+//	xhigh       → max
 func mapResponsesEffortToAnthropic(effort string) string {
-	if effort == "xhigh" {
+	switch effort {
+	case "min", "minimal":
+		return "low"
+	case "xhigh":
 		return "max"
 	}
 	return effort // low→low, medium→medium, high→high, unknown→passthrough

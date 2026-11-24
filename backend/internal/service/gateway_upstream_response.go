@@ -372,6 +372,9 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 		logger.LegacyPrintf("service.gateway", "[Forward] Failed to fully read upstream error body: Account=%d(%s) Status=%d err=%v",
 			account.ID, account.Name, resp.StatusCode, readErr)
 	}
+	if isAccountContentPolicyRejection(account, resp.StatusCode, body) {
+		return s.handleContentPolicyRejection(c, account, resp, body)
+	}
 
 	// 调试日志：打印上游错误响应
 	logger.LegacyPrintf("service.gateway", "[Forward] Upstream error (non-retryable): Account=%d(%s) Status=%d RequestID=%s Body=%s",
@@ -525,6 +528,25 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 	}
 	return nil, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
+}
+
+func (s *GatewayService) handleContentPolicyRejection(c *gin.Context, account *Account, resp *http.Response, body []byte) (*ForwardResult, error) {
+	message := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(body)))
+	if message == "" {
+		message = "Request rejected by the upstream content policy"
+	}
+	setOpsUpstreamError(c, resp.StatusCode, message, "")
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		ProxyID: opsUpstreamProxyID(account), ProxyName: opsUpstreamProxyName(account),
+		Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
+		UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("x-request-id"),
+		Kind: "http_error", Message: message,
+	})
+	MarkResponseCommitted(c)
+	c.JSON(http.StatusForbidden, gin.H{"type": "error", "error": gin.H{
+		"type": "invalid_request_error", "code": "content_policy_violation", "message": message,
+	}})
+	return nil, fmt.Errorf("upstream content policy rejection: %s", message)
 }
 
 // handleRetryExhaustedSideEffects 在重试耗尽后标记账号状态；requestedModel 是实际发往上游的模型，

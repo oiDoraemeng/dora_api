@@ -565,6 +565,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 		return s.sendErrorAndEnd(c, "Failed to create test payload")
 	}
 	payloadBytes, _ := json.Marshal(payload)
+	payloadBytes = prepareClaudeCodeAPIKeyCompatibilityBody(c, account, payloadBytes)
 
 	// Send test_start event
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
@@ -596,6 +597,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	account.ApplyHeaderOverrides(req.Header)
+	applyClaudeCodeAPIKeyCompatibilityHeaders(req, account, payloadBytes)
 
 	// Get proxy URL
 	proxyURL := ""
@@ -614,7 +616,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 		errMsg := fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body))
 
 		// 403 表示账号被上游封禁，标记为 error 状态
-		if resp.StatusCode == http.StatusForbidden {
+		if resp.StatusCode == http.StatusForbidden && !isAccountContentPolicyRejection(account, resp.StatusCode, body) {
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
 

@@ -158,6 +158,9 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		respBody, _ := s.readUpstreamErrorBody(resp)
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+		if isAccountContentPolicyRejection(account, resp.StatusCode, respBody) {
+			return s.handleContentPolicyRejection(c, account, resp, respBody)
+		}
 
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
